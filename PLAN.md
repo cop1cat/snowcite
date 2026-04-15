@@ -7,7 +7,7 @@ MCP-сервер для systematic literature review: поиск по arXiv / Se
 1. **Ревью через чат, не через web UI.** Claude батчами читает абстракты, сам пре-фильтрует "очевидно релевантно / очевидно мимо / borderline", показывает borderline-статьи юзеру с обоснованием. Решения летят в SQLite через MCP-tools. Никакого Starlette, браузера, второго терминала.
 2. **SQLite — единственный стор.** Дедуп по DOI, fallback на нормализованный title.
 3. **Tectonic вместо системного TeXLive.** Сам качает пакеты, сам разбирается с bibtex.
-4. **Минимум зависимостей:** `mcp[cli]`, `httpx`, `aiosqlite`, `arxiv`, `pydantic-settings`. Никаких web-фреймворков.
+4. **Минимум зависимостей:** `mcp[cli]`, `httpx`, `aiosqlite`, `arxiv`, `pydantic-settings`, `rapidfuzz`. Никаких web-фреймворков.
 5. **Состояние решений с обоснованием** (`reason` поле) — готовый аудит-trail для PRISMA-диаграммы.
 
 ## Схема БД
