@@ -3,7 +3,7 @@
 import re
 import unicodedata
 
-from rapidfuzz import fuzz
+from rapidfuzz import fuzz, process
 
 TITLE_SIMILARITY_THRESHOLD = 90.0  # rapidfuzz ratio (0..100), ≥90 ≈ duplicate
 
@@ -30,22 +30,20 @@ def normalize_doi(doi: str | None) -> str | None:
     return cleaned or None
 
 
-def titles_match(a: str, b: str) -> bool:
-    """True if normalized titles are ≥ TITLE_SIMILARITY_THRESHOLD similar."""
-    return fuzz.ratio(a, b) >= TITLE_SIMILARITY_THRESHOLD
-
-
 def find_title_match(needle_norm: str, haystack_norm: list[str]) -> int | None:
-    """Index of best match in haystack if above threshold, else None."""
+    """Index of best match in haystack if above threshold, else None.
+
+    Uses rapidfuzz C-level extractOne for early-exit performance.
+    """
     if not haystack_norm:
         return None
-    best_idx = -1
-    best_score = 0.0
-    for i, candidate in enumerate(haystack_norm):
-        score = fuzz.ratio(needle_norm, candidate)
-        if score > best_score:
-            best_score = score
-            best_idx = i
-    if best_score >= TITLE_SIMILARITY_THRESHOLD:
-        return best_idx
-    return None
+    result = process.extractOne(
+        needle_norm,
+        haystack_norm,
+        scorer=fuzz.ratio,
+        score_cutoff=TITLE_SIMILARITY_THRESHOLD,
+    )
+    if result is None:
+        return None
+    _, _, idx = result
+    return idx

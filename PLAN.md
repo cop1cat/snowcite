@@ -87,7 +87,7 @@ review_summary (
 ### Ревью (chat-native)
 - `set_review_criteria(criteria_text)` — фиксирует inclusion/exclusion критерии + пользовательские категории
 - `get_review_criteria()` — Claude перечитывает перед каждым батчем (защита от дрифта)
-- `get_unreviewed_papers(limit=20, filters=None)` — батч для пре-фильтра
+- `get_unreviewed_papers(limit=20, source=None, year_from=None, year_to=None)` — батч для пре-фильтра
 - `set_review_status(paper_ids, status, reason, note=None, reviewed_by="auto")` — **batch**, принимает список id; ставит `stale=TRUE` на summary
 - `get_review_progress()` — `{total, approved, maybe, rejected, unreviewed}`
 - `save_review_summary(summary, clusters)` — UPSERT singleton; ≤500 слов; clusters: `[{topic, paper_ids, count}]`

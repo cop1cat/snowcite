@@ -1,7 +1,7 @@
 """LaTeX/PDF generation tools."""
 
+import asyncio
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -71,6 +71,7 @@ async def write_latex(
         rows = await cur.fetchall()
 
     bib_entries: list[str] = []
+    used_keys: set[str] = set()
     for row in rows:
         if row["bibtex"]:
             bib_entries.append(row["bibtex"])
@@ -83,6 +84,7 @@ async def write_latex(
                 venue=row["venue"],
                 doi=row["doi"],
                 source=row["source"],
+                used_keys=used_keys,
             ))
 
     bib_path = out / "references.bib"
@@ -94,20 +96,22 @@ async def write_latex(
 @mcp.tool()
 async def compile_pdf(tex_path: str) -> dict[str, Any]:
     """Compile .tex via tectonic. Returns {pdf_path, success, log}."""
-    tex = Path(tex_path)
+    tex = Path(tex_path).resolve()
     if not tex.exists():
         return {"pdf_path": "", "success": False, "log": f"File not found: {tex_path}"}
+    if not tex.suffix == ".tex":
+        return {"pdf_path": "", "success": False, "log": f"Not a .tex file: {tex_path}"}
 
-    result = subprocess.run(
-        ["tectonic", str(tex)],
-        capture_output=True,
-        text=True,
-        timeout=300,
+    proc = await asyncio.create_subprocess_exec(
+        "tectonic", str(tex),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
     )
+    stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=300)
 
     pdf_path = tex.with_suffix(".pdf")
     return {
         "pdf_path": str(pdf_path) if pdf_path.exists() else "",
-        "success": result.returncode == 0,
-        "log": result.stdout + result.stderr,
+        "success": proc.returncode == 0,
+        "log": stdout.decode() + stderr.decode(),
     }

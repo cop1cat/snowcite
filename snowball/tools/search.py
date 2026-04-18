@@ -136,11 +136,7 @@ async def save_papers(papers: list[dict[str, Any]]) -> dict[str, int]:
 
 # ─── Read tools ─────────────────────────────────────────────────────────────
 
-def _paper_row_to_dict(row: Any) -> dict[str, Any]:
-    d = dict(row)
-    d["authors"] = json.loads(d.pop("authors_json"))
-    d["metadata"] = json.loads(d.pop("metadata_json")) if d.get("metadata_json") else {}
-    return d
+from snowball.tools.common import paper_row_to_dict
 
 
 @mcp.tool()
@@ -184,7 +180,7 @@ async def get_saved_papers(
     async with get_connection() as conn:
         cur = await conn.execute(query, params)
         rows = await cur.fetchall()
-    return [_paper_row_to_dict(r) for r in rows]
+    return [paper_row_to_dict(r) for r in rows]
 
 
 @mcp.tool()
@@ -204,7 +200,7 @@ async def get_paper_details(paper_id: int) -> dict[str, Any]:
         row = await cur.fetchone()
         if row is None:
             return {"error": f"paper {paper_id} not found"}
-        paper = _paper_row_to_dict(row)
+        paper = paper_row_to_dict(row)
 
         cur = await conn.execute(
             "SELECT COUNT(*) FROM citations WHERE source_paper_id = ? AND direction = 'references'",

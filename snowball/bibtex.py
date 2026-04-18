@@ -11,9 +11,25 @@ def _make_cite_key(authors: list[str], year: int | None, title: str) -> str:
     return f"{first_author}{year or 'nd'}{first_word}".lower()
 
 
+_LATEX_ESCAPES = [
+    ("\\", r"\textbackslash{}"),
+    ("&", r"\&"),
+    ("%", r"\%"),
+    ("$", r"\$"),
+    ("#", r"\#"),
+    ("_", r"\_"),
+    ("{", r"\{"),
+    ("}", r"\}"),
+    ("~", r"\textasciitilde{}"),
+    ("^", r"\textasciicircum{}"),
+]
+
+
 def _escape_latex(text: str) -> str:
     nfkd = unicodedata.normalize("NFKD", text)
-    return nfkd.replace("&", r"\&").replace("%", r"\%").replace("_", r"\_")
+    for ch, repl in _LATEX_ESCAPES:
+        nfkd = nfkd.replace(ch, repl)
+    return nfkd
 
 
 def generate_bibtex(
@@ -23,8 +39,16 @@ def generate_bibtex(
     venue: str | None = None,
     doi: str | None = None,
     source: str | None = None,
+    used_keys: set[str] | None = None,
 ) -> str:
     key = _make_cite_key(authors, year, title)
+    if used_keys is not None:
+        base_key = key
+        suffix = ord("a")
+        while key in used_keys:
+            key = f"{base_key}{chr(suffix)}"
+            suffix += 1
+        used_keys.add(key)
     entry_type = "article"
     if source == "arxiv" or (venue and "arxiv" in venue.lower()):
         entry_type = "misc"

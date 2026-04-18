@@ -3,8 +3,11 @@
 import json
 from typing import Any
 
+import aiosqlite
+
 from snowball.app import mcp
 from snowball.db import get_connection
+from snowball.tools.common import paper_row_to_dict
 from snowball.types import ReviewedBy, Source, Status
 
 
@@ -86,12 +89,7 @@ async def get_unreviewed_papers(
     async with get_connection() as conn:
         cur = await conn.execute(query, params)
         rows = await cur.fetchall()
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["authors"] = json.loads(d.pop("authors_json"))
-        out.append(d)
-    return out
+    return [paper_row_to_dict(r) for r in rows]
 
 
 # ─── Status ─────────────────────────────────────────────────────────────────
@@ -106,25 +104,33 @@ async def set_review_status(
 ) -> dict[str, int]:
     """Batch-set review status with required reason (PRISMA trail). Marks summary as stale."""
     updated = 0
+    skipped: list[int] = []
     async with get_connection() as conn:
         for pid in paper_ids:
-            await conn.execute(
-                """
-                INSERT INTO reviews (paper_id, status, reason, note, reviewed_by, reviewed_at)
-                VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(paper_id) DO UPDATE SET
-                    status = excluded.status,
-                    reason = excluded.reason,
-                    note = excluded.note,
-                    reviewed_by = excluded.reviewed_by,
-                    reviewed_at = CURRENT_TIMESTAMP
-                """,
-                (pid, status, reason, note, reviewed_by),
-            )
-            updated += 1
-        await _mark_summary_stale(conn)
+            try:
+                await conn.execute(
+                    """
+                    INSERT INTO reviews (paper_id, status, reason, note, reviewed_by, reviewed_at)
+                    VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+                    ON CONFLICT(paper_id) DO UPDATE SET
+                        status = excluded.status,
+                        reason = excluded.reason,
+                        note = excluded.note,
+                        reviewed_by = excluded.reviewed_by,
+                        reviewed_at = CURRENT_TIMESTAMP
+                    """,
+                    (pid, status, reason, note, reviewed_by),
+                )
+                updated += 1
+            except aiosqlite.IntegrityError:
+                skipped.append(pid)
+        if updated > 0:
+            await _mark_summary_stale(conn)
         await conn.commit()
-    return {"updated": updated}
+    result: dict[str, Any] = {"updated": updated}
+    if skipped:
+        result["skipped_invalid_ids"] = skipped
+    return result
 
 
 # ─── Progress ───────────────────────────────────────────────────────────────
@@ -222,14 +228,16 @@ async def get_papers_for_writing(
                 "SELECT clusters_json FROM review_summary WHERE id = 1"
             )
             row = await cur.fetchone()
-        if row:
-            clusters = json.loads(row["clusters_json"])
-            for c in clusters:
-                if c.get("topic", "").lower() == cluster.lower():
-                    paper_ids = c.get("paper_ids", [])
-                    break
+        if not row:
+            return [{"error": "No review summary exists yet. Run save_review_summary first."}]
+        clusters_data = json.loads(row["clusters_json"])
+        available = [c.get("topic", "") for c in clusters_data]
+        for c in clusters_data:
+            if c.get("topic", "").lower() == cluster.lower():
+                paper_ids = c.get("paper_ids", [])
+                break
         if paper_ids is None:
-            return []
+            return [{"error": f"Cluster '{cluster}' not found. Available: {available}"}]
 
     query = """
         SELECT p.id, p.source, p.doi, p.title, p.year, p.venue, p.abstract,
@@ -249,9 +257,4 @@ async def get_papers_for_writing(
     async with get_connection() as conn:
         cur = await conn.execute(query, params)
         rows = await cur.fetchall()
-    out = []
-    for r in rows:
-        d = dict(r)
-        d["authors"] = json.loads(d.pop("authors_json"))
-        out.append(d)
-    return out
+    return [paper_row_to_dict(r) for r in rows]
