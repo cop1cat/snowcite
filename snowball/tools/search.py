@@ -132,7 +132,14 @@ async def save_papers(papers: list[dict[str, Any]]) -> dict[str, int]:
     return {"saved": saved, "duplicates": duplicates}
 
 
-# ─── Stubs for later phases ─────────────────────────────────────────────────
+# ─── Read tools ─────────────────────────────────────────────────────────────
+
+def _paper_row_to_dict(row: Any) -> dict[str, Any]:
+    d = dict(row)
+    d["authors"] = json.loads(d.pop("authors_json"))
+    d["metadata"] = json.loads(d.pop("metadata_json")) if d.get("metadata_json") else {}
+    return d
+
 
 @mcp.tool()
 async def get_saved_papers(
@@ -144,14 +151,71 @@ async def get_saved_papers(
     limit: int = 100,
     offset: int = 0,
 ) -> list[dict[str, Any]]:
-    """Fetch saved papers with optional filters."""
-    raise NotImplementedError("Phase 3")
+    """Fetch saved papers with optional filters. Joins review status."""
+    query = """
+        SELECT p.*, r.status AS review_status, r.reason AS review_reason,
+               r.note AS review_note, r.reviewed_by, r.reviewed_at
+        FROM papers p
+        LEFT JOIN reviews r ON r.paper_id = p.id
+        WHERE 1=1
+    """
+    params: list[Any] = []
+    if status is not None:
+        query += " AND r.status = ?"
+        params.append(status)
+    if source is not None:
+        query += " AND p.source = ?"
+        params.append(source)
+    if year_from is not None:
+        query += " AND p.year >= ?"
+        params.append(year_from)
+    if year_to is not None:
+        query += " AND p.year <= ?"
+        params.append(year_to)
+    if search:
+        query += " AND (p.title LIKE ? OR p.abstract LIKE ?)"
+        pattern = f"%{search}%"
+        params.extend([pattern, pattern])
+    query += " ORDER BY p.id LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+
+    async with get_connection() as conn:
+        cur = await conn.execute(query, params)
+        rows = await cur.fetchall()
+    return [_paper_row_to_dict(r) for r in rows]
 
 
 @mcp.tool()
 async def get_paper_details(paper_id: int) -> dict[str, Any]:
-    """Full paper record by id."""
-    raise NotImplementedError("Phase 3")
+    """Full paper record by id, including review status and citation counts."""
+    async with get_connection() as conn:
+        cur = await conn.execute(
+            """
+            SELECT p.*, r.status AS review_status, r.reason AS review_reason,
+                   r.note AS review_note, r.reviewed_by, r.reviewed_at
+            FROM papers p
+            LEFT JOIN reviews r ON r.paper_id = p.id
+            WHERE p.id = ?
+            """,
+            (paper_id,),
+        )
+        row = await cur.fetchone()
+        if row is None:
+            return {"error": f"paper {paper_id} not found"}
+        paper = _paper_row_to_dict(row)
+
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM citations WHERE source_paper_id = ? AND direction = 'references'",
+            (paper_id,),
+        )
+        paper["references_count"] = (await cur.fetchone())[0]
+
+        cur = await conn.execute(
+            "SELECT COUNT(*) FROM citations WHERE source_paper_id = ? AND direction = 'citations'",
+            (paper_id,),
+        )
+        paper["citations_count"] = (await cur.fetchone())[0]
+    return paper
 
 
 @mcp.tool()
