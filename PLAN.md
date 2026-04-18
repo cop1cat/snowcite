@@ -9,6 +9,7 @@ MCP-сервер для systematic literature review: поиск по arXiv / Se
 3. **Tectonic вместо системного TeXLive.** Сам качает пакеты, сам разбирается с bibtex.
 4. **Минимум зависимостей:** `mcp[cli]`, `httpx`, `aiosqlite`, `arxiv`, `pydantic-settings`, `rapidfuzz`. Никаких web-фреймворков.
 5. **Состояние решений с обоснованием** (`reason` поле) — готовый аудит-trail для PRISMA-диаграммы.
+6. **Rolling review summary** — после каждого батча Claude фиксирует сжатую картину: кластеры, ключевые papers, мотивацию. Защита от дрифта между батчами и между сессиями. Summary верифицируется через live counts при каждом чтении.
 
 ## Схема БД
 
@@ -54,7 +55,25 @@ citations (
   direction TEXT NOT NULL,         -- 'references' | 'citations'
   PRIMARY KEY (source_paper_id, cited_paper_id, direction)
 )
+
+review_summary (
+  id INTEGER PRIMARY KEY CHECK (id = 1),  -- singleton row, always overwritten
+  summary TEXT NOT NULL,                   -- Claude-generated rolling digest, ≤500 words
+  clusters_json TEXT NOT NULL,             -- [{"topic": str, "paper_ids": [int], "count": int}]
+  counts_snapshot_json TEXT NOT NULL,      -- {"approved": N, "maybe": N, ...} at time of write
+  stale BOOLEAN DEFAULT FALSE,            -- set TRUE by save_papers / set_review_status triggers
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+)
 ```
+
+### review_summary — защита от известных проблем
+
+1. **Drift**: `get_review_summary()` пересчитывает live counts и сравнивает с `counts_snapshot_json`. При расхождении — предупреждение в ответе: "summary may be stale: snapshot says 23 approved, actual 18".
+2. **Инвалидация**: `stale` флаг ставится в TRUE автоматически при `save_papers` (новые papers) и `set_review_status` (решения изменились). `get_review_summary()` включает `stale` в ответ.
+3. **Snowball**: `save_papers` ставит `stale=TRUE` → Claude видит "N new papers since last summary" → регенерирует summary.
+4. **Накопление**: singleton (id=1), `save_review_summary()` делает UPSERT — одна запись, перезаписывается каждый батч. Claude агрегирует всё предыдущее в ≤500 слов.
+5. **LaTeX**: summary даёт outline/структуру. Для текста — отдельный `get_papers_for_writing(cluster)` возвращает approved papers batch-по-кластеру.
+6. **Кластеры юзера**: `set_review_criteria` хранит не только inclusion/exclusion, но и пользовательские категории. Claude использует их при генерации summary.
 
 ## MCP tools
 
@@ -66,11 +85,14 @@ citations (
 - `expand_citations(paper_id, direction, limit=20)` — references или citations; arXiv → fallback на Semantic Scholar по DOI
 
 ### Ревью (chat-native)
-- `set_review_criteria(criteria_text)` — фиксирует inclusion/exclusion критерии
+- `set_review_criteria(criteria_text)` — фиксирует inclusion/exclusion критерии + пользовательские категории
 - `get_review_criteria()` — Claude перечитывает перед каждым батчем (защита от дрифта)
 - `get_unreviewed_papers(limit=20, filters=None)` — батч для пре-фильтра
-- `set_review_status(paper_ids, status, reason, note=None, reviewed_by="auto")` — **batch**, принимает список id
+- `set_review_status(paper_ids, status, reason, note=None, reviewed_by="auto")` — **batch**, принимает список id; ставит `stale=TRUE` на summary
 - `get_review_progress()` — `{total, approved, maybe, rejected, unreviewed}`
+- `save_review_summary(summary, clusters)` — UPSERT singleton; ≤500 слов; clusters: `[{topic, paper_ids, count}]`
+- `get_review_summary()` — summary + clusters + live counts + stale check + расхождение counts
+- `get_papers_for_writing(cluster=None, limit=20)` — approved papers с abstract, батчами по кластеру (для LaTeX-фазы)
 
 ### LaTeX / PDF
 - `write_latex(sections, title, author, bibliography_style="plain", output_dir="data")` — секции готовые (Claude написал текст), сервер собирает .tex + .bib из approved
@@ -80,12 +102,14 @@ citations (
 
 1. Юзер: "вот тема X, найди статьи"
 2. Claude: `set_review_criteria("...")`, `search_papers(...)`, `save_papers(...)`
-3. Claude: `get_unreviewed_papers(limit=20)` → читает абстракты → сам решает очевидные → `set_review_status([ids], "approved"|"rejected", reason="auto: ...", reviewed_by="auto")`
-4. Borderline-статьи показывает юзеру **по одной** с рассуждением, ждёт `i`/`e`/`m`
-5. После решения юзера: `set_review_status([id], status, reason="manual: ...", reviewed_by="user")`
-6. Повторяет батчи до `get_review_progress()` без unreviewed
-7. Snowball: на approved зовёт `expand_citations`, save_papers, новые попадают в unreviewed
-8. После ревью: `write_latex(sections, ...)` → `compile_pdf(...)`
+3. Claude: `get_review_summary()` (если не первый батч) → видит текущую картину + stale-предупреждения
+4. Claude: `get_unreviewed_papers(limit=20)` → читает абстракты → сам решает очевидные → `set_review_status([ids], "approved"|"rejected", reason="auto: ...", reviewed_by="auto")`
+5. Borderline-статьи показывает юзеру **по одной** с рассуждением, ждёт `i`/`e`/`m`
+6. После решения юзера: `set_review_status([id], status, reason="manual: ...", reviewed_by="user")`
+7. **После каждого батча**: `save_review_summary(summary, clusters)` — фиксирует что узнал, ≤500 слов, используя категории из criteria
+8. Повторяет батчи до `get_review_progress()` без unreviewed
+9. Snowball: на approved зовёт `expand_citations`, save_papers (ставит `stale=TRUE`), новые попадают в unreviewed
+10. После ревью: `get_papers_for_writing(cluster=...)` батчами → `write_latex(sections, ...)` → `compile_pdf(...)`
 
 ## API-клиенты
 
@@ -156,10 +180,13 @@ snowball-mcp/
 - Запись в `citations` таблицу
 
 ### Фаза 5 — Ревью
-- `set_review_criteria` / `get_review_criteria`
+- `set_review_criteria` / `get_review_criteria` (теперь включает пользовательские категории)
 - `get_unreviewed_papers` (батчи, фильтры)
-- `set_review_status` (батч-операция)
+- `set_review_status` (батч-операция; ставит `stale=TRUE` на summary)
 - `get_review_progress`
+- `save_review_summary` / `get_review_summary` (singleton UPSERT, live count verification, stale detection)
+- `get_papers_for_writing` (approved papers батчами по кластеру для LaTeX)
+- Таблица `review_summary` + stale-триггеры
 - В CLAUDE.md — детальный workflow ревью для Claude
 
 ### Фаза 6 — LaTeX/PDF
@@ -184,3 +211,6 @@ snowball-mcp/
 - **Bias от Claude при borderline** — показывать рассуждение нейтрально, без явной рекомендации
 - **OpenAlex API key** — с февраля 2026 политика поменялась, проверить на момент запуска
 - **Tectonic** — отдельная установка (`brew install tectonic`)
+- **Summary drift** — summary ≠ ground truth. `get_review_summary()` верифицирует counts и показывает расхождения. Claude не должен слепо доверять summary — проверять через live counts
+- **Summary после snowball** — `save_papers` ставит `stale=TRUE`. Claude обязан регенерировать summary после snowball-раунда
+- **Кластеры** — Claude должен использовать категории из `review_criteria`, а не выдумывать свои

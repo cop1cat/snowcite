@@ -13,12 +13,13 @@
 ## Как вести ревью (это твой основной workflow)
 
 1. **Перед каждым батчем** зови `get_review_criteria()` — критерии могли быть заданы давно, защита от дрифта.
-2. `get_unreviewed_papers(limit=20)` — бери батчами по 10–20, не пытайся загрузить всё.
-3. Для каждой статьи в батче реши **сам**:
+2. **Прочитай summary**: `get_review_summary()` — текущая картина: кластеры, ключевые papers, stale-предупреждения. Если summary stale или counts расходятся — скажи об этом юзеру. Если summary ещё нет (первый батч) — пропусти.
+3. `get_unreviewed_papers(limit=20)` — бери батчами по 10–20, не пытайся загрузить всё.
+4. Для каждой статьи в батче реши **сам**:
    - **Очевидно релевантно** (matches criteria) → батч в `set_review_status([ids], "approved", reason="auto: matches criterion X", reviewed_by="auto")`
    - **Очевидно мимо** → батч в `set_review_status([ids], "rejected", reason="auto: off-topic — Y", reviewed_by="auto")`
    - **Borderline** → отложи, покажешь юзеру
-4. Borderline — **по одной**, юзеру:
+5. Borderline — **по одной**, юзеру:
    ```
    Paper 7/87: "Title" (Year, Authors)
    Кратко: ...
@@ -26,17 +27,29 @@
    i / e / m?
    ```
    **Не давай рекомендацию** — она создаёт bias. Только факты + почему сложно решить.
-5. Юзер отвечает → `set_review_status([id], status, reason="manual: <user comment if any>", reviewed_by="user")`.
-6. После ответа — следующий борд-кейс или следующий батч.
-7. `get_review_progress()` периодически, чтобы юзер видел прогресс.
+6. Юзер отвечает → `set_review_status([id], status, reason="manual: <user comment if any>", reviewed_by="user")`.
+7. **После каждого батча** (не после каждой статьи!) — `save_review_summary(summary, clusters)`:
+   - Summary ≤500 слов, rolling (включай всё предыдущее, не append)
+   - Используй категории из `review_criteria`, не выдумывай свои кластеры
+   - Clusters: `[{"topic": "...", "paper_ids": [...], "count": N}]`
+   - Это singleton — перезаписывается при каждом вызове
+8. `get_review_progress()` периодически, чтобы юзер видел прогресс.
+
+### Правила работы с summary
+
+- **Не доверяй summary слепо.** Это твоя же генерация, которая может содержать неточности. `get_review_summary()` возвращает live counts — всегда сверяй их с тем что написано в summary text.
+- **Stale = регенерируй.** Если `stale=true` (после snowball или ручных правок) — прочти approved/maybe papers и перегенерируй summary.
+- **Summary для outline, papers для текста.** При написании LaTeX — summary помогает со структурой, но абстракты бери через `get_papers_for_writing(cluster=...)`.
+- **Кластеры = категории юзера.** Если юзер задал категории в criteria — используй их. Не переизобретай.
 
 ## Snowball-цикл
 
 После первого прохода ревью:
 1. `get_saved_papers(status="approved")`
 2. Для каждой → `expand_citations(id, "references")` и/или `"citations"`
-3. `save_papers(...)` — новые попадают в unreviewed (дедуп по DOI работает автоматически)
-4. Повтори ревью-цикл на новых
+3. `save_papers(...)` — новые попадают в unreviewed (дедуп по DOI работает автоматически). **Это ставит `stale=TRUE` на summary.**
+4. `get_review_summary()` → увидишь stale warning → регенерируй summary с учётом новых papers
+5. Повтори ревью-цикл на новых
 
 ## Команды
 
