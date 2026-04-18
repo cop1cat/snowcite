@@ -224,5 +224,30 @@ async def expand_citations(
     direction: Direction,
     limit: int = 20,
 ) -> list[dict[str, Any]]:
-    """Fetch references or citations for one paper. arXiv falls back to Semantic Scholar by DOI."""
-    raise NotImplementedError("Phase 4")
+    """Fetch references or citations for one paper.
+
+    Uses Semantic Scholar API. For arXiv papers without a Semantic Scholar ID,
+    falls back to DOI lookup. Returns papers (not yet saved — call save_papers explicitly).
+    """
+    async with get_connection() as conn:
+        cur = await conn.execute(
+            "SELECT source, source_id, doi FROM papers WHERE id = ?",
+            (paper_id,),
+        )
+        row = await cur.fetchone()
+    if row is None:
+        return [{"error": f"paper {paper_id} not found"}]
+
+    source, source_id, doi = row["source"], row["source_id"], row["doi"]
+
+    ss_id: str | None = None
+    if source == "semantic_scholar":
+        ss_id = source_id
+    elif doi:
+        ss_id = await semantic_scholar.resolve_by_doi(doi)
+
+    if ss_id is None:
+        return [{"error": f"Cannot resolve paper {paper_id} (source={source}) to Semantic Scholar ID. No DOI available."}]
+
+    related = await semantic_scholar.get_related(ss_id, direction, limit)
+    return [p.model_dump() for p in related]
