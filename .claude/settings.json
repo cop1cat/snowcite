@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__snowcite__*",
+      "Read",
+      "Write",
+      "Edit",
+      "Glob",
+      "Grep",
+      "WebSearch",
+      "Bash(typst:*)",
+      "Bash(tectonic:*)",
+      "Bash(uv run:*)",
+      "Bash(uv sync:*)",
+      "Bash(uv add:*)",
+      "Bash(pytest:*)",
+      "Bash(git mv:*)",
+      "Bash(git rm:*)"
+    ]
+  }
+}

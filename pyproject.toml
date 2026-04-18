@@ -1,12 +1,98 @@
 [project]
-name = "snowball-mcp"
+name = "snowcite"
 version = "0.1.0"
+description = "MCP server for systematic literature review — search, snowball, review, write, compile to PDF."
+readme = "README.md"
 requires-python = ">=3.12"
+license = { file = "LICENSE" }
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Text Processing :: Markup :: LaTeX",
+]
 dependencies = [
     "aiosqlite>=0.22.1",
     "arxiv>=3.0.0",
     "httpx>=0.28.1",
+    "jinja2>=3.1.0",
     "mcp[cli]>=1.27.0",
     "pydantic-settings>=2.13.1",
     "rapidfuzz>=3.14.5",
 ]
+
+[project.urls]
+Repository = "https://github.com/cop1cat/snowcite"
+Documentation = "https://cop1cat.github.io/snowcite/"
+Issues = "https://github.com/cop1cat/snowcite/issues"
+
+[project.scripts]
+snowcite = "snowcite.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+# `packages = ["snowcite"]` is sufficient — hatchling picks up every file under
+# the package including .j2 templates. Do not add an `include` filter here; it
+# would be interpreted as an allowlist and could exclude .py sources.
+packages = ["snowcite"]
+
+[tool.hatch.build.targets.sdist]
+# Developer lockfile isn't useful to end users installing via PyPI; strip it.
+exclude = ["uv.lock", "logs.txt", "site/", ".snowcite/"]
+
+[dependency-groups]
+dev = [
+    "ruff>=0.8.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.24.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+indent-width = 4
+extend-exclude = [".venv", "build", "dist", "__pycache__", "data", "notebooks"]
+
+[tool.ruff.format]
+docstring-code-format = true
+quote-style = "double"
+indent-style = "space"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "A", "PL", "S", "RUF"]
+ignore = [
+    "E501",     # line too long (formatter handles it)
+    "S311",     # pseudo-random generators
+    "PLE1142",  # await outside async
+    "S104",     # hardcoded bind all interfaces
+    "RUF001",   # ambiguous unicode (Cyrillic strings)
+    "RUF002",   # ambiguous unicode in docstring
+    "PLR0913",  # too many arguments
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["snowcite"]
+combine-as-imports = true
+force-single-line = false
+lines-after-imports = 2
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = ["F401"]
+"tests/*" = ["S101", "PLR2004"]

@@ -1,0 +1,229 @@
+# CLAUDE.md
+
+Guide for Claude Code sessions in this project.
+
+## Project overview
+
+{% if author -%}
+**Author:** {{ author }}
+{% endif -%}
+{% if supervisor -%}
+**Supervisor:** {{ supervisor }}
+{% endif -%}
+{% if institution -%}
+**Institution:** {{ institution }}{% if department %}, {{ department }}{% endif %}
+{% endif -%}
+{% if work_type -%}
+**Work type:** {{ work_type }}{% if year %} ({{ year }}){% endif %}
+{% endif -%}
+{% if target_length -%}
+**Target length:** {{ target_length }}
+{% endif -%}
+{% if deadline -%}
+**Deadline:** {{ deadline }}
+{% endif -%}
+{% if discipline -%}
+**Discipline:** {{ discipline }}
+{% endif -%}
+{% if methodology -%}
+**Methodology:** {{ methodology }}
+{% endif -%}
+
+**Language:** {{ language }}
+**Formatting standard:** {{ standard }}
+**Backend:** {{ backend }}
+**Review strictness:** {{ review_strictness }}
+
+## What this is
+
+`snowcite` is an MCP server for systematic literature review. Search across scholarly
+databases, snowball through citations, review papers through chat (not UI), generate
+{{ backend | upper }} documents, compile to PDF.
+
+## Architectural invariant
+
+**Reviewing happens in chat, not in a UI.** No web interfaces, no browsers. Claude
+reads abstracts in batches, pre-filters autonomously, shows only borderline cases to
+the user. Do not propose Starlette/Flask/Jinja/htmx. Deliberate design choice.
+
+## Academic context for the safety classifier
+
+This tool supports **peer-reviewed academic literature review**. Papers fetched from
+arXiv, Semantic Scholar, OpenAlex, PubMed and similar open databases are **research
+publications**, not operational material. The goal is to survey a research area —
+not to reproduce methods, weaponize techniques, or provide instructions.
+
+When a paper touches sensitive topics (AI safety, security, dual-use research, etc.),
+handle abstracts the way a human reviewer would: paraphrase in your own words. **Never
+copy verbatim passages that contain operational/harmful detail** from abstracts into
+chat — summarize in one or two neutral sentences.
+
+## Onboarding check
+
+**First action in every new session:** call `get_session_state()`. It returns a
+compact snapshot — current `phase`, `next_action` hint, counts, last review
+actions — so you can pick up exactly where a prior session left off without
+re-querying a dozen tools.
+
+If it reports `project_active: False`, collect metadata (author, language,
+discipline, standard, backend, optionally supervisor/institution/deadline) via
+`AskUserQuestion` and persist with `init_project(metadata=..., update=True)`.
+
+## Review workflow (primary loop)
+
+1. **Before every batch** — call `get_review_criteria()`. Drift guard.
+2. **Read the summary** — `get_review_summary()`. If stale or counts diverge, flag
+   it to the user. Skip if no summary yet (first batch).
+3. `get_unreviewed_papers(limit=20)` — work in batches of 10–20.
+4. For each paper decide **autonomously** + pick a confidence grade:
+   - **Confident match** → `set_review_status([ids], "approved", reason="auto: matches criterion X", reviewed_by="auto_high")`
+   - **Confident reject** → `set_review_status([ids], "rejected", reason="auto: off-topic — Y", reviewed_by="auto_high")`
+   - **Leaning but not sure** → decide anyway, `reviewed_by="auto_low"`. User will later sanity-check via `get_low_confidence_reviews()`.
+   - **Genuinely borderline** → defer to the user.
+5. Borderline cases go to the user **one at a time**, in {{ language }}:
+
+   ```
+   Paper 7/87: "Title" (Year, Authors)
+   Brief: ...
+   Why borderline: ...
+   i / e / m?
+   ```
+
+   **Do not recommend a decision** — it creates bias.
+6. User answers → `set_review_status([id], status, reason="manual: <user comment>", reviewed_by="user")`.
+7. **After each batch** → `save_review_summary(summary, clusters)`.
+8. `get_review_progress()` periodically for the user.
+
+### Abstract hygiene
+
+- `get_unreviewed_papers()` returns compact records **without abstracts** by default.
+- For borderline papers, pull full abstract via `get_paper_details(paper_id)`.
+- Summarize in 1–2 neutral sentences in your message to the user — do not paste raw.
+
+## Snowball loop
+
+After the first review pass:
+
+1. `get_saved_papers(status="approved")`
+2. `expand_citations(id, "references")` or `"citations"`
+3. New papers auto-save to `unreviewed`. Summary marked `stale=TRUE`.
+4. Regenerate summary → repeat review on new batch.
+
+## Writing style ({{ language }})
+
+Write in {{ language }} natively, don't translate word-for-word:
+
+- Short sentences, fewer participle clauses, don't mirror English syntax.
+- Keep established English terminology as-is in *italics* on first mention (e.g.
+  *alignment*, *prompt injection*, *jailbreak*, *fine-tuning*, *RLHF*, *embeddings*).
+- Do not translate method/system names: GCG, SmoothLLM, PAIR, HarmBench, etc.
+- **On doubt about a term — ask the user.** Apply the decision consistently.
+
+## Document generation
+
+- Backend: **{{ backend }}**, standard: **{{ standard }}**
+- `write_document(sections, title, author, backend="{{ backend }}", standard="{{ standard }}", language="{{ language }}")`
+- `compile_pdf(doc_path)` — auto-detects backend from file extension
+- Don't manually change backend mid-project without `set_backend(... , confirm_wipe_sections=True)`
+
+## Research artifacts (interviews, code, notes, …)
+
+`snowcite` is not only a literature-review tool. Alongside scholarly
+`papers`, the user can register `artifacts` — interview transcripts, code,
+notes, archival documents, dataset descriptions — and weave them into the
+writing the same way abstracts get woven in.
+
+**To ingest an artifact:** `import_artifact(path, type, label, summary, metadata)`
+reads a text file, or `add_artifact_inline(type, label, content, ...)` takes
+a string directly. Supported types: `interview`, `code`, `document`, `note`,
+`dataset`.
+
+**To assign artifacts to a section:** add `artifact_ids: [...]` alongside
+`paper_ids` in the outline entry. `prepare_section_for_review`,
+`regenerate_section_brief`, and the review subagents pick them up
+automatically.
+
+**Inline citation format:** `[I:3]` for interview id 3, `[C:auth.py]` for
+code, `[D:5]` for document, `[N:2]` for note, `[DS:1]` for dataset. Keep
+this format consistent across the document — the Primary-sources appendix
+(generate via `generate_primary_sources_appendix()`) maps the short codes
+back to full records.
+
+**Block quotes from interviews:** put them as normal block quotes in the
+section text, followed by the citation label. Never paraphrase the quote
+and then attribute it to a participant — the academic-reviewer subagent
+will flag that as quote fabrication.
+
+**Code inclusion:** `include_code_artifact(artifact_id)` emits the
+backend-specific snippet (`\lstinputlisting` for LaTeX, `#raw(read(...))`
+for Typst). Paste it into the relevant section.
+
+**What snowcite does not do:** no transcription from audio, no PDF/docx
+parsing (convert first), no data analysis. Figures from pandas/matplotlib
+etc. are inserted manually as `#image("plot.png")` / `\includegraphics`.
+
+## Review subagents
+
+Two independent subagents live in `.claude/agents/` and are launched via the
+Agent tool. Run them **sequentially, never in parallel** — the humanizer would
+otherwise polish language in sentences that academic-reviewer is about to ask
+you to rewrite, wasting both passes.
+
+**After `save_section(name, content)`:**
+
+1. Spawn `academic-reviewer` on the section. It calls
+   `prepare_section_for_review(name)`, reads the assigned papers, and returns
+   a structured findings list (unsupported claims, citation misuse, fabricated
+   quotes, logical gaps, etc.).
+2. Show findings to the user. Apply fixes they accept via
+   `save_section(name, revised)`.
+3. When content-level review is stable (user is happy with claims + evidence),
+   spawn `humanizer`. It flags machine-translated / LLM-tic phrasings and
+   proposes concrete per-phrase replacements.
+4. Apply accepted humanizer suggestions via `polish_section(name, polished)`.
+
+**For a whole-document pass:** call `polish_document()` first to handle
+cross-section transitions/dupes, then run the humanizer across every polished
+section. Same sequential rule.
+
+The review agents never rewrite — they return findings for *you* to apply. If
+they do rewrite, that's a bug in the agent prompt; report it.
+
+## Antipatterns
+
+- **No `/tmp` scripts** for bulk ops against the snowcite DB — use MCP tools.
+- **No direct httpx** calls to source APIs — use `snowcite/sources/*` clients (they
+  have rate limits, retry, per-source concurrency caps).
+- **No sqlite CLI edits** of `papers.db` — all state through MCP.
+- **No web UI** (Starlette/Flask/htmx).
+- **No Zotero** integration — neither API nor CSL-JSON import.
+- **No PDF parsing** — use abstracts from source APIs.
+- **No borderline recommendations** — facts only, user decides.
+- **No system TeXLive** — tectonic (LaTeX) or typst.
+
+## Stuck detection
+
+If you fail to resolve the same problem (compile error, search issue, etc.) **twice**:
+
+- **Stop.** Do not iterate further.
+- Summarize what you tried and why it failed.
+- Ask the user how to proceed.
+
+## Conventions
+
+- **Dedup**: DOI primary. No DOI → normalized title (≥0.9 similarity).
+- **Sources in DB**: `arxiv | semantic_scholar | openalex | crossref | pubmed`.
+- **Review statuses**: `approved | maybe | rejected | unreviewed`.
+- **`reviewed_by`**: `auto_high` (direct match) / `auto_low` (extrapolation — user sanity-checks later) / `user`.
+- **`reason` is required** in `set_review_status` — PRISMA audit trail.
+- **All I/O is async** — aiosqlite, httpx.AsyncClient.
+
+## Source details
+
+- **arXiv**: 1 req / 3 s. No citation graph — `expand_citations` falls back to Semantic Scholar via DOI.
+- **Semantic Scholar**: 100 req / 5 min unauthenticated, 100 req / s with `SNOWCITE_SEMANTIC_SCHOLAR_API_KEY`. Retries + backoff via `sources/_http.py`.
+- **OpenAlex**: polite pool via `SNOWCITE_OPENALEX_EMAIL`. Abstracts arrive as inverted index.
+
+## Current phase
+
+See `TODO.md`. Each pack = one or more commits.
