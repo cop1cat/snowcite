@@ -54,6 +54,15 @@ CREATE TABLE IF NOT EXISTS citations (
     direction TEXT NOT NULL CHECK (direction IN ('references','citations')),
     PRIMARY KEY (source_paper_id, cited_paper_id, direction)
 );
+
+CREATE TABLE IF NOT EXISTS review_summary (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    summary TEXT NOT NULL,
+    clusters_json TEXT NOT NULL,
+    counts_snapshot_json TEXT NOT NULL,
+    stale INTEGER DEFAULT 0,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
 """
 
 

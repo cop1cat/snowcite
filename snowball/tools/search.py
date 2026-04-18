@@ -128,6 +128,8 @@ async def save_papers(papers: list[dict[str, Any]]) -> dict[str, int]:
                 existing_norms.append(norm)
             except aiosqlite.IntegrityError:
                 duplicates += 1
+        if saved > 0:
+            await conn.execute("UPDATE review_summary SET stale = 1 WHERE id = 1")
         await conn.commit()
     return {"saved": saved, "duplicates": duplicates}
 
