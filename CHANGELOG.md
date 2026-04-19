@@ -5,6 +5,31 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.3.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] — 2026-04-19
+
+### Added
+
+- `save_thesis` / `get_thesis` tools — store a 2–5 paragraph statement of intent that anchors outline, search, and review in the optional thesis-first workflow.
+- `gap_check` tool — flags substantive sentences (≥ 8 words by default) across stored sections that make no `[N]` citation. Candidates to cite or trim.
+- `rewrite_citations` tool — bulk-remap `[N]` paper-id references across `section_content` through MCP, replacing the previous pattern of hand-patching generated `.tex` / `.typ` files.
+- `estimate_pages` tool — renders the current draft to a temp PDF and reports actual page count, word total, and delta to `target_pages`.
+- Target metrics on `project_metadata`: `target_pages`, `target_sources_min`, `target_sources_max`, `target_words`, `citation_density_target`. Surfaced in `get_session_state().targets`.
+- `get_review_progress` now also reports writing stats (words, citations, citations per 100 words) and emits warnings when approved sources or citation density fall below targets.
+- Self-contained ГОСТ Typst template (margins 30/15/20/20 mm, Times New Roman 14 pt, 1.5 line spacing, `gost-r-705-2008-numeric` bibliography). No longer depends on `@preview/modern-g7-32`.
+
+### Fixed
+
+- `write_document` now rewrites `[N]` paper-id citations in section content to the cite keys actually published in the bibliography (`\cite{key}` for LaTeX, `@key` for Typst). Previously the document and `.bib`/`.yml` used unrelated keys and the PDF failed to resolve references.
+- Cite-key fallback for papers without structured authors derives the prefix from the first meaningful title word instead of a literal `unknown`.
+
+### Changed
+
+- CLAUDE.md template now documents the optional thesis-first flow, mandates a `get_low_confidence_reviews()` pass before `approve_outline()`, and explicitly bans `sed`/`grep` patching of generated compile artifacts after a failed `compile_pdf`.
+
+### Migrated
+
+- Additive `ALTER TABLE` on `project_metadata` to add the new target columns for pre-0.2 databases; runs on first `init_db` call.
+
 ## [0.1.0] — 2026-04-18
 
 First public release of `snowcite` — an MCP server for systematic literature review.
@@ -35,4 +60,5 @@ First public release of `snowcite` — an MCP server for systematic literature r
 - PDFs are not parsed — abstracts come from source APIs.
 - Only `tectonic` and `typst` are supported; no system TeX Live.
 
+[0.2.0]: https://github.com/cop1cat/snowball-mcp/releases/tag/v0.2.0
 [0.1.0]: https://github.com/cop1cat/snowball-mcp/releases/tag/v0.1.0

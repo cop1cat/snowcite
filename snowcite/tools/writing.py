@@ -6,6 +6,7 @@ approval cycle (via AskUserQuestion); these tools only read/write and flag drift
 """
 
 import json
+import re
 from typing import Any
 
 from snowcite.app import mcp
@@ -29,6 +30,21 @@ from snowcite.types import Backend, DriftWarning, OutlineSection
 
 
 _SINGLETON_TABLES = ("outline", "skeleton")
+
+# Bracketed numeric-cite regex — shared by gap_check and rewrite_citations.
+# Matches `[N]`, `[N, M]`, `[N; M]`. Intentionally duplicated with the copy in
+# `bibliography.rewrite_cite_refs`: keeps tools independent of render path.
+_CITE_REF_RE = re.compile(r"\[(\d+(?:\s*[,;]\s*\d+)*)\]")
+
+# Sentence splitter for gap_check — splits on `.`/`?`/`!` followed by whitespace
+# or newline. Good enough for the rough "which sentences have no cite" signal;
+# not a linguistic tokenizer, doesn't understand abbreviations (e.g. "etc.").
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+
+# Short sentences (connectives, transitions, section headers rendered inline)
+# rarely need a citation. Below this length we skip them entirely so the gap
+# report focuses on substantive claims.
+_GAP_CHECK_MIN_WORDS = 8
 
 
 def _word_count(text: str) -> int:
@@ -267,6 +283,195 @@ async def save_section(name: str, content: str) -> dict[str, Any]:
         "name": name,
         "version": next_version,
         "word_count": _word_count(content),
+    }
+
+
+# ─── Thesis (thesis-first workflow entry point) ────────────────────────────
+
+
+@mcp.tool()
+async def save_thesis(content: str) -> dict[str, Any]:
+    """Persist the paper's thesis — 2–5 paragraphs answering "what is this
+    about, what's the contribution". Singleton; re-saving overwrites.
+
+    Written early in the thesis-first workflow (before the outline) so later
+    stages — outline, search, review — can key off an explicit statement of
+    intent instead of drifting toward whatever papers happened to turn up
+    first. Let the thesis change as understanding deepens; just re-save.
+    """
+    text = content.strip()
+    if not text:
+        return {"error": "thesis content is empty"}
+    async with get_connection() as conn:
+        await conn.execute(
+            """
+            INSERT INTO thesis (id, content, updated_at)
+            VALUES (1, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(id) DO UPDATE SET
+                content = excluded.content,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (text,),
+        )
+        await conn.commit()
+    return {"saved": True, "word_count": _word_count(text)}
+
+
+@mcp.tool()
+async def get_thesis() -> dict[str, Any] | None:
+    """Read the stored thesis. Returns None if never set."""
+    async with get_connection() as conn:
+        cur = await conn.execute("SELECT content, updated_at FROM thesis WHERE id = 1")
+        row = await cur.fetchone()
+    if row is None:
+        return None
+    return {
+        "content": row["content"],
+        "word_count": _word_count(row["content"]),
+        "updated_at": row["updated_at"],
+    }
+
+
+# ─── gap_check ──────────────────────────────────────────────────────────────
+
+
+@mcp.tool()
+async def gap_check(
+    min_words: int = _GAP_CHECK_MIN_WORDS,
+    sections: list[str] | None = None,
+) -> dict[str, Any]:
+    """Find sentences in stored sections that make no citations.
+
+    Returns a list per section of substantive sentences (≥ `min_words` words)
+    that contain no `[N]` cite. These are candidates for either backing up
+    with a source or trimming. Short connective sentences are skipped — they
+    legitimately don't cite. Not a strict lint; a prompt for the author.
+
+    `sections` optionally restricts to a subset by name. With no sections in
+    the DB, returns empty `gaps` and `total_gaps = 0`.
+    """
+    async with get_connection() as conn:
+        if sections is None:
+            cur = await conn.execute("SELECT name, content FROM section_content")
+        else:
+            placeholders = ",".join("?" * len(sections))
+            cur = await conn.execute(
+                f"SELECT name, content FROM section_content WHERE name IN ({placeholders})",  # noqa: S608 — bound placeholder count
+                sections,
+            )
+        rows = await cur.fetchall()
+
+    gaps: list[dict[str, Any]] = []
+    total = 0
+    for row in rows:
+        name = row["name"]
+        content = row["content"] or ""
+        uncited: list[dict[str, Any]] = []
+        for sentence in _SENTENCE_SPLIT_RE.split(content):
+            stripped = sentence.strip()
+            wc = _word_count(stripped)
+            if wc < min_words:
+                continue
+            if _CITE_REF_RE.search(stripped):
+                continue
+            uncited.append({"sentence": stripped, "word_count": wc})
+        if uncited:
+            gaps.append({"section": name, "count": len(uncited), "sentences": uncited})
+            total += len(uncited)
+    return {"total_gaps": total, "min_words": min_words, "gaps": gaps}
+
+
+@mcp.tool()
+async def rewrite_citations(
+    mapping: dict[str, int],
+    sections: list[str] | None = None,
+) -> dict[str, Any]:
+    """Bulk-rewrite `[N]` paper-id citations across stored sections.
+
+    `mapping` keys are stringified old paper ids (JSON dicts carry string
+    keys); values are the new ids. Only cite refs whose id appears in
+    `mapping` are touched — other ids are left alone.
+
+    `sections` optionally restricts the rewrite to a subset of section names;
+    default is every row in `section_content`. Each modified section gets its
+    `version` incremented and `polished` reset to 0 — downstream tools will
+    treat the rewrite as a fresh revision.
+
+    Purpose: give Claude a first-class way to fix citations after paper-id
+    renumbering (dedup, merge, deletion) instead of hand-editing the rendered
+    `.tex` / `.typ` through sed. See CLAUDE.md "Stuck detection".
+    """
+    if not mapping:
+        return {"modified": [], "refs_replaced": 0, "sections_scanned": 0}
+
+    # Coerce keys to int so the replacement function does integer lookups.
+    try:
+        int_mapping = {int(k): int(v) for k, v in mapping.items()}
+    except (TypeError, ValueError) as e:
+        return {"error": f"mapping must be {{int: int}} (strings OK): {e}"}
+
+    total_replaced = 0
+    modified: list[dict[str, Any]] = []
+
+    async with get_connection() as conn:
+        if sections is None:
+            cur = await conn.execute("SELECT name, content, version FROM section_content")
+        else:
+            placeholders = ",".join("?" * len(sections))
+            cur = await conn.execute(
+                f"SELECT name, content, version FROM section_content WHERE name IN ({placeholders})",  # noqa: S608 — bound placeholder count
+                sections,
+            )
+        rows = await cur.fetchall()
+
+        for row in rows:
+            name = row["name"]
+            original = row["content"] or ""
+            section_replaced = 0
+
+            def _replace(match: re.Match[str]) -> str:
+                nonlocal section_replaced
+                raw = match.group(1)
+                # Preserve original separators so `[1, 2; 3]` stays the same
+                # shape after rewriting — split by delimiter tokens.
+                parts = re.split(r"([,;]\s*)", raw)
+                out: list[str] = []
+                for part in parts:
+                    if re.fullmatch(r"\d+", part):
+                        old = int(part)
+                        new = int_mapping.get(old)
+                        if new is None:
+                            out.append(part)
+                        else:
+                            out.append(str(new))
+                            section_replaced += 1
+                    else:
+                        out.append(part)
+                return "[" + "".join(out) + "]"
+
+            new_content = _CITE_REF_RE.sub(_replace, original)
+            if section_replaced == 0:
+                continue
+
+            next_version = row["version"] + 1
+            await conn.execute(
+                """
+                UPDATE section_content
+                SET content = ?, word_count = ?, version = ?,
+                    polished = 0, updated_at = CURRENT_TIMESTAMP
+                WHERE name = ?
+                """,
+                (new_content, _word_count(new_content), next_version, name),
+            )
+            total_replaced += section_replaced
+            modified.append({"name": name, "refs_replaced": section_replaced, "version": next_version})
+
+        await conn.commit()
+
+    return {
+        "modified": modified,
+        "refs_replaced": total_replaced,
+        "sections_scanned": len(rows),
     }
 
 

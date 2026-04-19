@@ -1,6 +1,7 @@
 """Review tools — criteria, status, progress, summary."""
 
 import json
+import re
 from typing import Any
 
 import aiosqlite
@@ -10,6 +11,20 @@ from snowcite.db import get_connection
 from snowcite.persistence import resolve_cluster_paper_ids
 from snowcite.tools.common import paper_row_to_dict
 from snowcite.types import ReviewedBy, Source, Status
+
+
+# Same cite-ref shape recognised by bibliography.rewrite_cite_refs. Duplicated
+# intentionally — counting cites in stored content shouldn't reach across to
+# the document-render module.
+_CITE_REF_RE = re.compile(r"\[(\d+(?:\s*[,;]\s*\d+)*)\]")
+
+
+def _count_cites(content: str) -> int:
+    """Count citation refs in a section body. `[1, 2]` counts as two cites."""
+    total = 0
+    for match in _CITE_REF_RE.finditer(content):
+        total += len(re.split(r"[,;]", match.group(1)))
+    return total
 
 
 async def _get_live_counts(conn: aiosqlite.Connection) -> dict[str, int]:
@@ -358,10 +373,74 @@ async def undo_last_review_action() -> dict[str, Any]:
 
 
 @mcp.tool()
-async def get_review_progress() -> dict[str, int]:
-    """Counts: {total, approved, maybe, rejected, unreviewed}."""
+async def get_review_progress() -> dict[str, Any]:
+    """Progress snapshot against the project's targets.
+
+    Always returns review counts (total / approved / maybe / rejected /
+    unreviewed). When the project has target metrics set in `init_project`
+    (sources min/max, words, citation density) this tool also returns how
+    far the current state is from those targets plus a `warnings` list for
+    anything below its floor.
+
+    Writing metrics (words, citations, density) come from `section_content`
+    rows; they're zero when no sections are written yet.
+    """
     async with get_connection() as conn:
-        return await _get_live_counts(conn)
+        counts = await _get_live_counts(conn)
+
+        cur = await conn.execute(
+            """
+            SELECT target_sources_min, target_sources_max, target_words,
+                   citation_density_target
+            FROM project_metadata WHERE id = 1
+            """
+        )
+        meta = await cur.fetchone()
+        targets = (
+            {k: meta[k] for k in meta.keys() if meta[k] is not None} if meta else {}
+        )
+
+        cur = await conn.execute("SELECT content FROM section_content")
+        section_rows = await cur.fetchall()
+
+    total_words = 0
+    total_cites = 0
+    for row in section_rows:
+        content = row["content"] or ""
+        total_words += len(content.split())
+        total_cites += _count_cites(content)
+
+    density = round(total_cites * 100 / total_words, 2) if total_words else 0.0
+
+    approved = counts.get("approved", 0)
+    warnings: list[str] = []
+
+    if targets.get("target_sources_min") and approved < targets["target_sources_min"]:
+        warnings.append(
+            f"approved sources ({approved}) below target floor "
+            f"({targets['target_sources_min']}) — need {targets['target_sources_min'] - approved} more"
+        )
+    if (
+        targets.get("citation_density_target")
+        and total_words > 0
+        and density < targets["citation_density_target"]
+    ):
+        warnings.append(
+            f"citation density ({density} per 100 words) below target "
+            f"({targets['citation_density_target']}) — undercited"
+        )
+
+    return {
+        "counts": counts,
+        "writing": {
+            "words": total_words,
+            "citations": total_cites,
+            "citation_density_per_100_words": density,
+            "sections_with_content": len(section_rows),
+        },
+        "targets": targets,
+        "warnings": warnings,
+    }
 
 
 # ─── Summary ────────────────────────────────────────────────────────────────

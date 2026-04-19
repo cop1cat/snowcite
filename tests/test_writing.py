@@ -11,17 +11,21 @@ from snowcite.tools.writing import (
     approve_outline,
     approve_skeleton,
     check_section_drift,
+    gap_check,
     generate_overview_table,
     generate_prisma_flow,
     get_outline,
     get_section,
     get_skeleton,
+    get_thesis,
     list_sections,
     polish_document,
     polish_section,
+    rewrite_citations,
     save_outline,
     save_section,
     save_skeleton,
+    save_thesis,
 )
 
 
@@ -282,3 +286,99 @@ async def test_overview_table_latex_longtable(tmp_project: Path):
     r = await generate_overview_table(backend="latex", columns=["year", "title"])
     assert r["snippet"].startswith(r"\begin{longtable}")
     assert "Year & Title" in r["snippet"]
+
+
+@pytest.mark.asyncio
+async def test_rewrite_citations_remaps_bracketed_refs(tmp_project: Path):
+    # Section with cites [1], [2, 3], [4]. Remap 1→11, 3→13; expect 1→11 and
+    # 3→13 replaced, 2 and 4 left alone, structure of grouped cite preserved.
+    await save_section("intro", "See [1] and [2, 3]; also [4].")
+    r = await rewrite_citations(mapping={"1": 11, "3": 13})
+    assert r["refs_replaced"] == 2
+    assert len(r["modified"]) == 1
+    assert r["modified"][0]["name"] == "intro"
+
+    stored = await get_section("intro")
+    assert "[11]" in stored["content"]
+    assert "[2, 13]" in stored["content"]
+    assert "[4]" in stored["content"]
+    # Unchanged section ids should not get bumped.
+    # Version was 1 initially (from save_section), now should be 2.
+    assert stored["version"] == 2
+
+
+@pytest.mark.asyncio
+async def test_rewrite_citations_skips_sections_without_target_ids(tmp_project: Path):
+    await save_section("a", "See [1].")
+    await save_section("b", "See [99].")
+    r = await rewrite_citations(mapping={"1": 2})
+    assert r["refs_replaced"] == 1
+    assert [m["name"] for m in r["modified"]] == ["a"]
+    # Section b untouched — version stays at 1.
+    assert (await get_section("b"))["version"] == 1
+
+
+@pytest.mark.asyncio
+async def test_rewrite_citations_empty_mapping_is_noop(tmp_project: Path):
+    await save_section("x", "See [1].")
+    r = await rewrite_citations(mapping={})
+    assert r["refs_replaced"] == 0
+    assert r["modified"] == []
+
+
+
+# ─── Thesis + gap_check ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_thesis_save_and_get(tmp_project: Path):
+    assert await get_thesis() is None
+    r = await save_thesis("This paper surveys ML for mining.  \n\nSecond paragraph.")
+    assert r["saved"] is True
+    assert r["word_count"] > 0
+    got = await get_thesis()
+    assert got is not None
+    assert "surveys ML" in got["content"]
+
+
+@pytest.mark.asyncio
+async def test_thesis_save_empty_is_error(tmp_project: Path):
+    r = await save_thesis("   \n  ")
+    assert "error" in r
+
+
+@pytest.mark.asyncio
+async def test_thesis_save_overwrites(tmp_project: Path):
+    await save_thesis("first version")
+    await save_thesis("second version is much longer and more detailed")
+    got = await get_thesis()
+    assert got["content"].startswith("second version")
+
+
+@pytest.mark.asyncio
+async def test_gap_check_flags_long_uncited_sentences(tmp_project: Path):
+    # Two sentences: one with a cite, one without. Both above min_words.
+    content = (
+        "This claim is well documented in the literature [1]. "
+        "A completely different assertion stands here with no supporting citation at all."
+    )
+    await save_section("intro", content)
+    r = await gap_check(min_words=5)
+    assert r["total_gaps"] == 1
+    assert r["gaps"][0]["section"] == "intro"
+    assert "completely different assertion" in r["gaps"][0]["sentences"][0]["sentence"]
+
+
+@pytest.mark.asyncio
+async def test_gap_check_skips_short_connectives(tmp_project: Path):
+    # Short sentences below the default min_words are ignored even without cites.
+    await save_section("short", "Hi. Also no cite here either really.")
+    r = await gap_check()
+    assert r["total_gaps"] == 0
+
+
+@pytest.mark.asyncio
+async def test_gap_check_no_sections_returns_empty(tmp_project: Path):
+    r = await gap_check()
+    assert r["total_gaps"] == 0
+    assert r["gaps"] == []

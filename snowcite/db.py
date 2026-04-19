@@ -83,6 +83,15 @@ CREATE TABLE IF NOT EXISTS skeleton (
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+-- Thesis: 2–5 paragraphs answering "what is this paper about, what's the
+-- contribution". Singleton. Written early (before outline) in the thesis-first
+-- workflow so outline + search can key off it.
+CREATE TABLE IF NOT EXISTS thesis (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    content TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS section_content (
     name TEXT PRIMARY KEY,
     content TEXT NOT NULL,
@@ -141,11 +150,28 @@ CREATE TABLE IF NOT EXISTS project_metadata (
     review_strictness TEXT DEFAULT 'standard'
         CHECK (review_strictness IN ('lenient','standard','phd_committee')),
     deadline TEXT,
+    target_pages INTEGER,
+    target_sources_min INTEGER,
+    target_sources_max INTEGER,
+    target_words INTEGER,
+    citation_density_target REAL,
     extra_json TEXT DEFAULT '{}',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 """
+
+# Columns added to `project_metadata` after the initial release. Each one is
+# appended lazily via `_migrate_project_metadata_add_columns` — SQLite's
+# `CREATE TABLE IF NOT EXISTS` doesn't touch existing tables, so pre-existing
+# DBs need the additive ALTER-TABLE dance.
+_TARGET_METRIC_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("target_pages", "INTEGER"),
+    ("target_sources_min", "INTEGER"),
+    ("target_sources_max", "INTEGER"),
+    ("target_words", "INTEGER"),
+    ("citation_density_target", "REAL"),
+)
 
 
 # Paths whose schema we've already applied this process + an asyncio.Lock per
@@ -199,6 +225,22 @@ async def _migrate_reviews_confidence(conn: aiosqlite.Connection) -> None:
     )
 
 
+async def _migrate_project_metadata_add_columns(conn: aiosqlite.Connection) -> None:
+    """Append missing target-metric columns to pre-existing `project_metadata` tables.
+
+    `CREATE TABLE IF NOT EXISTS` doesn't add columns to an existing table, so
+    every new nullable column introduced after v0.1 needs an additive ALTER
+    here. Ordering doesn't matter — SQLite appends to the end either way.
+    """
+    cur = await conn.execute("PRAGMA table_info(project_metadata)")
+    existing = {row[1] for row in await cur.fetchall()}
+    if not existing:
+        return  # fresh DB — main SCHEMA will create the table with all columns
+    for name, coltype in _TARGET_METRIC_COLUMNS:
+        if name not in existing:
+            await conn.execute(f"ALTER TABLE project_metadata ADD COLUMN {name} {coltype}")
+
+
 async def init_db(db_path: Path | None = None) -> None:
     """Create schema in the active project's DB (or at `db_path` if given).
 
@@ -215,6 +257,7 @@ async def init_db(db_path: Path | None = None) -> None:
         async with aiosqlite.connect(path) as conn:
             await _migrate_reviews_confidence(conn)
             await conn.executescript(SCHEMA)
+            await _migrate_project_metadata_add_columns(conn)
             await conn.commit()
         _initialized.add(resolved)
 

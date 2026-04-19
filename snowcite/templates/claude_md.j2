@@ -69,6 +69,22 @@ If it reports `project_active: False`, collect metadata (author, language,
 discipline, standard, backend, optionally supervisor/institution/deadline) via
 `AskUserQuestion` and persist with `init_project(metadata=..., update=True)`.
 
+## Thesis-first entry (optional)
+
+For longer/focused reviews, the recommended flow is:
+
+1. `save_thesis(text)` — 2–5 paragraphs: "what is this paper about, what's
+   the contribution". Written before search so the outline and downstream
+   search stay anchored to an explicit intent.
+2. Only then: outline → search → review. Re-read the thesis with
+   `get_thesis()` before every batch — the criteria drift guard applies to
+   the thesis too.
+3. After sections are drafted, run `gap_check()` to find substantive
+   sentences without citations; decide whether to cite more or trim.
+
+The classic flow (search → review → outline → write) still works — the
+thesis step is additive, not required.
+
 ## Review workflow (primary loop)
 
 1. **Before every batch** — call `get_review_criteria()`. Drift guard.
@@ -92,7 +108,18 @@ discipline, standard, backend, optionally supervisor/institution/deadline) via
    **Do not recommend a decision** — it creates bias.
 6. User answers → `set_review_status([id], status, reason="manual: <user comment>", reviewed_by="user")`.
 7. **After each batch** → `save_review_summary(summary, clusters)`.
-8. `get_review_progress()` periodically for the user.
+8. `get_review_progress()` periodically for the user. It also reports writing
+   stats (words, citations per 100 words) and warns when approved sources or
+   citation density drop below the project's target metrics.
+
+### Mandatory low-confidence second pass
+
+Before `approve_outline()`, call `get_low_confidence_reviews()` and walk the
+user through every `auto_low` decision one at a time. These are papers you
+weren't sure about — the user is the tiebreaker. **Do not skip this step**;
+it is the only safeguard against `auto_low` drift silently shaping the
+outline. The review bias from "defaulting to include/exclude" compounds
+otherwise.
 
 ### Abstract hygiene
 
@@ -208,6 +235,14 @@ If you fail to resolve the same problem (compile error, search issue, etc.) **tw
 - **Stop.** Do not iterate further.
 - Summarize what you tried and why it failed.
 - Ask the user how to proceed.
+
+**Specifically: after a failed `compile_pdf`, do NOT reach for `sed` / `grep` /
+manual edits on the generated `.tex` / `.typ` / `.yml` / `.bib`.** Those are
+derived artifacts — fix the root cause through MCP tools (`write_document`,
+`rewrite_citations`, `set_backend`, etc.) instead. If no MCP tool covers the
+change you need, tell the user so the gap can be closed, rather than
+side-channel-patching the output. Repeated hand-edits to derived files
+accumulate drift that later tool runs silently overwrite.
 
 ## Conventions
 

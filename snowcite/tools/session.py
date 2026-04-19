@@ -126,6 +126,20 @@ async def get_session_state() -> dict[str, Any]:
         cur = await conn.execute("SELECT approved FROM skeleton WHERE id = 1")
         skeleton_row = await cur.fetchone()
 
+        cur = await conn.execute(
+            """
+            SELECT target_pages, target_sources_min, target_sources_max,
+                   target_words, citation_density_target
+            FROM project_metadata WHERE id = 1
+            """
+        )
+        meta_row = await cur.fetchone()
+        targets = (
+            {k: meta_row[k] for k in meta_row.keys() if meta_row[k] is not None}
+            if meta_row
+            else {}
+        )
+
     return {
         "phase": phase,
         "next_action": _NEXT_ACTION_HINTS[phase],
@@ -140,4 +154,5 @@ async def get_session_state() -> dict[str, Any]:
             "exists": skeleton_row is not None,
             "approved": bool(skeleton_row and skeleton_row["approved"]),
         },
+        "targets": targets,
     }

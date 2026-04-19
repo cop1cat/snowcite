@@ -1,6 +1,6 @@
 [project]
 name = "snowcite"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server for systematic literature review — search, snowball, review, write, compile to PDF."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -3,9 +3,10 @@
 import json
 from pathlib import Path
 
+import aiosqlite
 import pytest
 
-from snowcite.db import _initialized
+from snowcite.db import _initialized, get_db_path
 from snowcite.projects import create_project_dir
 from snowcite.tools.init import (
     apply_settings_diff,
@@ -21,6 +22,56 @@ def isolated_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.chdir(tmp_path)
     _initialized.clear()
     return tmp_path
+
+
+@pytest.mark.asyncio
+async def test_init_persists_target_metrics(isolated_cwd: Path):
+    await init_project(
+        metadata={
+            "author": "X",
+            "target_pages": 20,
+            "target_sources_min": 40,
+            "target_sources_max": 60,
+            "target_words": 5000,
+            "citation_density_target": 1.2,
+        }
+    )
+    meta = await get_project_metadata()
+    assert meta["target_pages"] == 20
+    assert meta["target_sources_min"] == 40
+    assert meta["target_sources_max"] == 60
+    assert meta["target_words"] == 5000
+    assert meta["citation_density_target"] == 1.2
+
+
+@pytest.mark.asyncio
+async def test_init_migrates_existing_db_without_target_columns(
+    isolated_cwd: Path, monkeypatch: pytest.MonkeyPatch
+):
+    # Simulate a pre-0.2 DB by creating `project_metadata` without the target
+    # columns, then running init_project and checking the migration added them.
+    create_project_dir()
+    db_path = get_db_path()
+    async with aiosqlite.connect(db_path) as conn:
+        await conn.executescript(
+            """
+            CREATE TABLE project_metadata (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                author TEXT,
+                extra_json TEXT DEFAULT '{}',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            INSERT INTO project_metadata (id, author) VALUES (1, 'legacy');
+            """
+        )
+        await conn.commit()
+    _initialized.clear()  # force re-run of migrations on next connect
+
+    await init_project(metadata={"target_pages": 15})
+    meta = await get_project_metadata()
+    assert meta["author"] == "legacy"
+    assert meta["target_pages"] == 15
 
 
 @pytest.mark.asyncio

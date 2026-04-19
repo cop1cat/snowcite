@@ -9,14 +9,51 @@ import re
 import unicodedata
 from typing import Any
 
+from snowcite.logging import log
+
 
 # ─── Shared helpers ─────────────────────────────────────────────────────────
 
+# Stop-words skipped when title-word fallback is needed for the cite-key prefix.
+# Kept intentionally short — any noun-like word is preferable to "anon".
+_TITLE_STOPWORDS = frozenset(
+    {"a", "an", "the", "on", "of", "in", "to", "for", "and", "or", "is", "at", "by"}
+)
+
+
+def _title_fallback_word(title: str) -> str:
+    """Pick the first non-trivial word from a title for use as a cite-key prefix.
+
+    Returns "anon" only when the title has no usable words at all — preferable
+    to the old "unknown" sentinel, which produced keys like `unknown2024foo`
+    that looked like bugs in the output.
+    """
+    if not title:
+        return "anon"
+    for raw in title.split():
+        word = re.sub(r"[^\w]", "", raw).lower()
+        if word and word not in _TITLE_STOPWORDS and not word.isdigit():
+            return word
+    return "anon"
+
 
 def make_cite_key(authors: list[str], year: int | None, title: str) -> str:
-    """Deterministic cite key: authorSurnameYearFirstTitleWord, lowercase."""
-    first_author = authors[0].split()[-1] if authors else "unknown"
-    first_author = re.sub(r"[^\w]", "", first_author)
+    """Deterministic cite key: authorSurnameYearFirstTitleWord, lowercase.
+
+    When `authors` is empty (common for papers saved via WebSearch without
+    structured author metadata) we fall back to the first meaningful title
+    word rather than the legacy "unknown" sentinel — keeps keys recognisable
+    when eyeballing the .bib / .yml.
+    """
+    if authors:
+        first_author = re.sub(r"[^\w]", "", authors[0].split()[-1])
+    else:
+        first_author = _title_fallback_word(title)
+        log.warning(
+            "make_cite_key: no authors for title %r — falling back to title word %r",
+            title,
+            first_author,
+        )
     first_word = re.sub(r"[^\w]", "", title.split(maxsplit=1)[0]) if title else "untitled"
     return f"{first_author}{year or 'nd'}{first_word}".lower()
 
@@ -154,6 +191,60 @@ def generate_hayagriva_entry(
     return "\n".join(lines)
 
 
+def assign_cite_keys(entries: list[dict[str, Any]]) -> list[tuple[dict[str, Any], str]]:
+    """Assign a stable, disambiguated cite key to each entry.
+
+    Single source of truth for cite keys: both `build_bibtex_document` /
+    `generate_hayagriva` and the in-text citation rewriter in `write_document`
+    consume this so text refs and bibliography stay in sync.
+
+    Entries carrying a pre-existing `bibtex` string keep whatever key that raw
+    entry declares. Generated keys disambiguate against the pre-existing ones.
+    Returned order matches input order.
+    """
+    used: set[str] = set()
+
+    # Pass 1 — claim keys from pre-existing raw BibTeX so generated keys below
+    # can't silently collide with them.
+    for e in entries:
+        raw = e.get("bibtex")
+        if raw:
+            k = extract_bibtex_key(raw)
+            if k:
+                used.add(k)
+
+    assigned: list[tuple[dict[str, Any], str]] = []
+    for e in entries:
+        raw = e.get("bibtex")
+        if raw:
+            key = extract_bibtex_key(raw)
+            if key is None:
+                # Raw entry without a parseable key — generate one for it so
+                # the rewriter still has something to point at.
+                key = disambiguate_key(
+                    make_cite_key(
+                        e.get("authors") or [], e.get("year"), e.get("title") or ""
+                    ),
+                    used,
+                )
+        else:
+            key = disambiguate_key(
+                make_cite_key(e.get("authors") or [], e.get("year"), e.get("title") or ""),
+                used,
+            )
+        assigned.append((e, key))
+    return assigned
+
+
+def build_cite_key_map(entries: list[dict[str, Any]]) -> dict[int, str]:
+    """Return `{entry["id"]: cite_key}` for entries that carry an `id` field.
+
+    Used by `write_document` to rewrite `[N]`-style paper-id citations into
+    the cite keys the bibliography actually publishes.
+    """
+    return {e["id"]: k for e, k in assign_cite_keys(entries) if "id" in e}
+
+
 def build_bibtex_document(entries: list[dict[str, Any]]) -> str:
     """Join per-paper BibTeX into a full .bib document.
 
@@ -162,48 +253,37 @@ def build_bibtex_document(entries: list[dict[str, Any]]) -> str:
     verbatim; their cite keys are registered up-front so generated keys
     produced later can't collide with them.
     """
-    # Pass 1 — claim every pre-existing cite key so later disambiguation sees them.
-    used: set[str] = set()
-    for e in entries:
+    out: list[str] = []
+    for e, key in assign_cite_keys(entries):
         raw = e.get("bibtex")
         if raw:
-            key = extract_bibtex_key(raw)
-            if key:
-                used.add(key)
-
-    # Pass 2 — emit entries. Generated bibtex disambiguates against `used`.
-    out: list[str] = []
-    for e in entries:
-        if e.get("bibtex"):
-            out.append(e["bibtex"])
+            out.append(raw)
             continue
-        out.append(
-            generate_bibtex(
-                title=e["title"],
-                authors=e.get("authors") or [],
-                year=e.get("year"),
-                venue=e.get("venue"),
-                doi=e.get("doi"),
-                source=e.get("source"),
-                used_keys=used,
-            )
+        # The key is already chosen; regenerate the BibTeX with it injected.
+        # We reuse generate_bibtex but bypass its own disambiguation — passing
+        # an empty `used_keys` set is safe because `key` is already unique.
+        entry = generate_bibtex(
+            title=e["title"],
+            authors=e.get("authors") or [],
+            year=e.get("year"),
+            venue=e.get("venue"),
+            doi=e.get("doi"),
+            source=e.get("source"),
         )
+        # Force the pre-assigned key so output matches assign_cite_keys.
+        entry = re.sub(r"^(@[A-Za-z]+\{)[^,]+,", rf"\1{key},", entry, count=1)
+        out.append(entry)
     return "\n\n".join(out)
 
 
 def generate_hayagriva(entries: list[dict[str, Any]]) -> str:
     """Build a full Hayagriva YAML document from a list of paper dicts.
 
-    Each dict needs: title, authors, year, venue, doi, source. Cite keys are
-    generated and disambiguated the same way as for BibTeX.
+    Each dict needs: title, authors, year, venue, doi, source. Cite keys come
+    from `assign_cite_keys` — same source the BibTeX path uses.
     """
-    used_keys: set[str] = set()
     fragments: list[str] = []
-    for e in entries:
-        key = disambiguate_key(
-            make_cite_key(e.get("authors") or [], e.get("year"), e.get("title") or ""),
-            used_keys,
-        )
+    for e, key in assign_cite_keys(entries):
         fragments.append(
             generate_hayagriva_entry(
                 cite_key=key,
@@ -216,3 +296,48 @@ def generate_hayagriva(entries: list[dict[str, Any]]) -> str:
             )
         )
     return "\n\n".join(fragments) + "\n"
+
+
+# ─── In-text citation rewriter ──────────────────────────────────────────────
+
+# Matches `[N]`, `[N, M]`, `[N; M]`, `[N,M,K]` — bracketed groups of one or
+# more comma/semicolon-separated integers. Conservative: won't match `[foo]`,
+# `[@key]`, `[N-M]` or prose containing numbers mid-sentence.
+_CITE_REF_RE = re.compile(r"\[(\d+(?:\s*[,;]\s*\d+)*)\]")
+
+
+def rewrite_cite_refs(content: str, id_to_key: dict[int, str], backend: str) -> str:
+    """Rewrite `[N]` paper-id citations in text to backend-native cite syntax.
+
+    Paper IDs are the DB row ids returned by `save_papers` / visible in
+    `get_unreviewed_papers`. Claude writes text using those (e.g. "...shown
+    in [61, 62]..."), this function resolves them to the real cite keys.
+
+    - LaTeX backend → `\\cite{key1,key2}` (biblatex/natbib grouping).
+    - Typst backend → `@key1 @key2` (numeric styles collapse consecutive refs).
+
+    Unknown ids are left as-is with a warning logged — so the output compiles
+    but the reviewer can spot orphans in the rendered PDF.
+    """
+
+    def _replace(match: re.Match[str]) -> str:
+        raw_ids = [int(x.strip()) for x in re.split(r"[,;]", match.group(1))]
+        keys: list[str] = []
+        for pid in raw_ids:
+            k = id_to_key.get(pid)
+            if k is None:
+                log.warning(
+                    "rewrite_cite_refs: paper id %d not in approved set — left as [%d]",
+                    pid,
+                    pid,
+                )
+                return match.group(0)
+            keys.append(k)
+        if backend == "latex":
+            return "\\cite{" + ",".join(keys) + "}"
+        # Typst: space-join so consecutive `@k` refs survive intact; numeric
+        # CSL styles (ieee, gost-r-705-2008-numeric) collapse them into
+        # "[1, 2]" at render time.
+        return " ".join(f"@{k}" for k in keys)
+
+    return _CITE_REF_RE.sub(_replace, content)

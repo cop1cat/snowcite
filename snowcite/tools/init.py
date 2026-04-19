@@ -38,6 +38,13 @@ _METADATA_FIELDS = (
     "backend",
     "review_strictness",
     "deadline",
+    # Target metrics — set during onboarding so Claude can check progress
+    # against an explicit goal instead of inventing one. All optional.
+    "target_pages",
+    "target_sources_min",
+    "target_sources_max",
+    "target_words",
+    "citation_density_target",
 )
 
 # Baseline allowlist for Claude Code's settings.json. T4 merges/diffs this into
