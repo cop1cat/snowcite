@@ -326,7 +326,6 @@ async def test_rewrite_citations_empty_mapping_is_noop(tmp_project: Path):
     assert r["modified"] == []
 
 
-
 # ─── Thesis + gap_check ─────────────────────────────────────────────────────
 
 

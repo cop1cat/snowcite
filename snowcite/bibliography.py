@@ -222,9 +222,7 @@ def assign_cite_keys(entries: list[dict[str, Any]]) -> list[tuple[dict[str, Any]
                 # Raw entry without a parseable key — generate one for it so
                 # the rewriter still has something to point at.
                 key = disambiguate_key(
-                    make_cite_key(
-                        e.get("authors") or [], e.get("year"), e.get("title") or ""
-                    ),
+                    make_cite_key(e.get("authors") or [], e.get("year"), e.get("title") or ""),
                     used,
                 )
         else:

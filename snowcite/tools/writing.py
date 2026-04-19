@@ -464,7 +464,9 @@ async def rewrite_citations(
                 (new_content, _word_count(new_content), next_version, name),
             )
             total_replaced += section_replaced
-            modified.append({"name": name, "refs_replaced": section_replaced, "version": next_version})
+            modified.append(
+                {"name": name, "refs_replaced": section_replaced, "version": next_version}
+            )
 
         await conn.commit()
 

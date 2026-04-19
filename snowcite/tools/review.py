@@ -396,9 +396,7 @@ async def get_review_progress() -> dict[str, Any]:
             """
         )
         meta = await cur.fetchone()
-        targets = (
-            {k: meta[k] for k in meta.keys() if meta[k] is not None} if meta else {}
-        )
+        targets = {k: meta[k] for k in meta.keys() if meta[k] is not None} if meta else {}
 
         cur = await conn.execute("SELECT content FROM section_content")
         section_rows = await cur.fetchall()

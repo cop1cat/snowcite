@@ -135,9 +135,7 @@ async def get_session_state() -> dict[str, Any]:
         )
         meta_row = await cur.fetchone()
         targets = (
-            {k: meta_row[k] for k in meta_row.keys() if meta_row[k] is not None}
-            if meta_row
-            else {}
+            {k: meta_row[k] for k in meta_row.keys() if meta_row[k] is not None} if meta_row else {}
         )
 
     return {

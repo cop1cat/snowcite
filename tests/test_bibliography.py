@@ -148,9 +148,7 @@ def test_rewrite_cite_refs_latex_single():
 
 
 def test_rewrite_cite_refs_latex_multiple():
-    out = rewrite_cite_refs(
-        "shown in [1, 2; 3]", {1: "a2024x", 2: "b2024y", 3: "c2024z"}, "latex"
-    )
+    out = rewrite_cite_refs("shown in [1, 2; 3]", {1: "a2024x", 2: "b2024y", 3: "c2024z"}, "latex")
     assert out == "shown in \\cite{a2024x,b2024y,c2024z}"
 
 
