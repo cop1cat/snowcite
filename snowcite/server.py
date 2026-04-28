@@ -19,6 +19,7 @@ from snowcite.sources._http import close_client
 from snowcite.tools import (  # noqa: F401
     artifacts as artifact_tools,
     compile as compile_tools,
+    critique as critique_tools,
     doctor,
     export,
     import_refs,
