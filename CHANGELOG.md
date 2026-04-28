@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/0.3.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] — 2026-04-28
+
+### Added
+
+- **Knowledge-graph notes layer.** New `notes` table holds short structured statements about papers (claim / finding / method / limitation per-paper, gap / contradiction / consensus / open_question cross-paper) with optional `note_links` typed edges. Tools: `add_note`, `add_notes`, `get_notes`, `update_note`, `delete_note`, `link_notes`, `get_note_density`. `set_review_status` accepts inline `notes=[...]` so review and extraction stay in one tool call.
+- **Cross-paper synthesis.** `get_cluster_notes(cluster)` returns per-paper notes grouped by paper plus existing cross-paper notes for one round-trip. `add_synthesis_note` atomically inserts a cross-paper note + `derived_from` links to its source per-paper notes (sources are required — synthesis must be traceable). `find_gaps` flags clusters that look thin, unsynthesised, or have unanchored contradictions; also reports cluster names absent from the current `review_summary`.
+- **Sections as first-class entities.** New `sections` table with structured `scope` (clusters / keywords / questions), `draft`, `status` (`outline | drafting | critiqued | done`), severity counters, and parent/position for hierarchy. Tools: `create_section`, `bulk_create_sections`, `list_sections`, `get_section`, `update_section`, `delete_section`, `get_outline_inputs` (thesis + clusters + criteria in one read for outline proposals).
+- **Section-scoped research.** `research_section(section_id)` runs `search_papers` once per `scope.keywords`/`scope.questions` and links newly persisted papers to the section via `paper_section_links`. `link_paper_to_section` / `unlink_paper_from_section` for manual edits, `get_section_papers` to list. Snowball is deliberately not auto-triggered.
+- **Critique / revise loop.** `get_section_critique_inputs` bundles draft + relevant notes (filtered by `scope.clusters`) + linked papers. `record_section_critique` accepts severity-tagged issues, persists aggregates (`blockers / should_fix / nits`) and `critique_iterations`, returns `should_stop` (true when blockers=0 OR iterations≥2). `revise_section(new_draft, mark_done?)` replaces the draft and resets critique state.
+
+### Migrated
+
+- `notes` + `note_links` + `sections` + `paper_section_links` are created by `init_db` on existing v0.2 projects. `sections.critique_iterations` arrives via additive `ALTER TABLE` for anyone who pulled an intermediate Phase-3 snapshot.
+
 ## [0.2.0] — 2026-04-19
 
 ### Added
