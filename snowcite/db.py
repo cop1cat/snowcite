@@ -133,6 +133,35 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE INDEX IF NOT EXISTS idx_artifacts_type ON artifacts(type);
 CREATE INDEX IF NOT EXISTS idx_artifacts_included ON artifacts(included);
 
+-- Knowledge graph layer (v0.3). `notes` are short structured statements
+-- extracted from papers during review and synthesised across papers afterward.
+-- per-paper types (claim/finding/method/limitation) carry paper_id;
+-- cross-paper types (gap/contradiction/consensus/open_question) leave it NULL
+-- and instead reference other notes via `note_links`.
+CREATE TABLE IF NOT EXISTS notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    paper_id INTEGER REFERENCES papers(id) ON DELETE CASCADE,
+    cluster TEXT,
+    type TEXT NOT NULL CHECK (type IN (
+        'claim','finding','method','limitation',
+        'gap','contradiction','consensus','open_question'
+    )),
+    text TEXT NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_notes_paper ON notes(paper_id);
+CREATE INDEX IF NOT EXISTS idx_notes_cluster ON notes(cluster);
+CREATE INDEX IF NOT EXISTS idx_notes_type ON notes(type);
+
+CREATE TABLE IF NOT EXISTS note_links (
+    from_note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+    to_note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+    kind TEXT NOT NULL CHECK (kind IN ('supports','contradicts','extends','derived_from')),
+    PRIMARY KEY (from_note_id, to_note_id, kind)
+);
+
 CREATE TABLE IF NOT EXISTS project_metadata (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     author TEXT,

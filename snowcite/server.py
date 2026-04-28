@@ -23,6 +23,7 @@ from snowcite.tools import (  # noqa: F401
     export,
     import_refs,
     init,
+    notes as note_tools,
     review,
     review_quality,
     search,
