@@ -31,6 +31,7 @@ type Phase = Literal[
     "done",
 ]
 type ArtifactType = Literal["interview", "code", "document", "note", "dataset"]
+type SectionStatus = Literal["outline", "drafting", "critiqued", "done"]
 # Knowledge-graph note types. Per-paper extraction during review yields the
 # first four; cross-paper synthesis (Phase 2) yields the last four.
 type NoteType = Literal[

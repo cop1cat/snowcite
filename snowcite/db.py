@@ -138,6 +138,30 @@ CREATE INDEX IF NOT EXISTS idx_artifacts_included ON artifacts(included);
 -- per-paper types (claim/finding/method/limitation) carry paper_id;
 -- cross-paper types (gap/contradiction/consensus/open_question) leave it NULL
 -- and instead reference other notes via `note_links`.
+-- v0.3 sections-as-entities. Coexists with the v0.2 outline/skeleton/section_content
+-- triple — those describe the legacy single-shot writing flow; this table backs
+-- the new draft → critique → revise loop where each section is independently
+-- addressable, has a typed scope (clusters/keywords/questions) for targeted
+-- research, and tracks severity counters that drive the critique stop criterion.
+CREATE TABLE IF NOT EXISTS sections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL,
+    scope_json TEXT NOT NULL DEFAULT '{}',
+    draft TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'outline'
+        CHECK (status IN ('outline','drafting','critiqued','done')),
+    parent_id INTEGER REFERENCES sections(id) ON DELETE CASCADE,
+    position INTEGER NOT NULL DEFAULT 0,
+    blockers INTEGER NOT NULL DEFAULT 0,
+    should_fix INTEGER NOT NULL DEFAULT 0,
+    nits INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_sections_parent ON sections(parent_id);
+CREATE INDEX IF NOT EXISTS idx_sections_status ON sections(status);
+
 CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     paper_id INTEGER REFERENCES papers(id) ON DELETE CASCADE,
