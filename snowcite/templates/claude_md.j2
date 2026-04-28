@@ -92,8 +92,8 @@ thesis step is additive, not required.
    it to the user. Skip if no summary yet (first batch).
 3. `get_unreviewed_papers(limit=20)` — work in batches of 10–20.
 4. For each paper decide **autonomously** + pick a confidence grade:
-   - **Confident match** → `set_review_status([ids], "approved", reason="auto: matches criterion X", reviewed_by="auto_high")`
-   - **Confident reject** → `set_review_status([ids], "rejected", reason="auto: off-topic — Y", reviewed_by="auto_high")`
+   - **Confident match** → `set_review_status([ids], "approved", reason="auto: matches criterion X", reviewed_by="auto_high", notes=[{type, text, cluster}, ...])`. For approved/maybe pass at least one `claim` or `finding` note in the same call — the knowledge graph feeds synthesis and writing.
+   - **Confident reject** → `set_review_status([ids], "rejected", reason="auto: off-topic — Y", reviewed_by="auto_high")`. No notes for rejects.
    - **Leaning but not sure** → decide anyway, `reviewed_by="auto_low"`. User will later sanity-check via `get_low_confidence_reviews()`.
    - **Genuinely borderline** → defer to the user.
 5. Borderline cases go to the user **one at a time**, in {{ language }}:
@@ -126,6 +126,28 @@ otherwise.
 - `get_unreviewed_papers()` returns compact records **without abstracts** by default.
 - For borderline papers, pull full abstract via `get_paper_details(paper_id)`.
 - Summarize in 1–2 neutral sentences in your message to the user — do not paste raw.
+
+## Synthesis pass
+
+After the corpus is reviewed, name patterns *across* papers — gaps, contradictions, consensus, open questions. Per cluster:
+
+1. `get_cluster_notes(cluster)` — per-paper notes grouped by paper + existing cross-paper notes in one call.
+2. `add_synthesis_note(cluster, type, text, derived_from_note_ids=[...])` for each pattern. `type` ∈ `gap | contradiction | consensus | open_question`. Sources are required — every cross-paper note must point at the per-paper notes that justify it.
+3. `find_gaps()` afterwards to see clusters that still look thin or unsynthesised. It also flags cluster names absent from `review_summary` — fix typos before continuing.
+
+## Writing loop (per section)
+
+Writing is section-by-section, not document-at-a-time. Each section is an entity with scope, draft, status, severity counters.
+
+1. **Outline.** `get_outline_inputs()` → propose section structure (title + scope = clusters/keywords/questions) → user approves → `bulk_create_sections([...])`.
+2. **Per section:**
+   1. (Optional) `research_section(section_id)` to bring in more papers for that scope. Snowball is **not** automatic.
+   2. `get_section_critique_inputs(section_id)` — draft + relevant notes (filtered by `scope.clusters`) + linked papers. If notes are sparse, do another synthesis pass on those clusters first.
+   3. Draft → `update_section(section_id, draft=..., status='drafting')`.
+   4. **Critique** in academic-reviewer voice. Generate `[{severity, type, text, suggested_action}]` issues, `severity ∈ {blocker, should_fix, nit}`. Submit via `record_section_critique`. Stop when blockers=0 OR iteration≥2.
+   5. **Revise.** `revise_section(section_id, new_draft=...)` resets counters. Loop.
+   6. Done → `revise_section(..., mark_done=True)` or `update_section(status='done')`.
+3. Document is done when every section is `status='done'`.
 
 ## Snowball loop
 
@@ -227,6 +249,10 @@ they do rewrite, that's a bug in the agent prompt; report it.
 - **No PDF parsing** — use abstracts from source APIs.
 - **No borderline recommendations** — facts only, user decides.
 - **No system TeXLive** — tectonic (LaTeX) or typst.
+- **No drafting a section without notes for its scope.** Empty `get_section_critique_inputs(...).notes` means the section has no graph to support it — review more papers into those clusters or narrow scope.
+- **No auto-`research_section` from inside critique.** Critique reports gaps; user decides on more search.
+- **No invented cluster names** in notes or section scope — clusters must come from `review_summary`.
+- **No `blocker` severity for style preferences** — reserve it for genuinely shipping-blocking issues (unsupported claim, factual error, contradiction with cited paper).
 
 ## Stuck detection
 

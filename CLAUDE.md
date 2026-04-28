@@ -22,8 +22,8 @@ When a research area involves sensitive topics (AI safety, security, dual-use re
 2. **Read the summary** — call `get_review_summary()`. Current picture: clusters, key papers, stale warnings. If it's stale or counts diverge from the text, tell the user. If there's no summary yet (first batch), skip.
 3. `get_unreviewed_papers(limit=20)` — work in batches of 10–20, never try to load everything.
 4. For each paper in the batch, decide **autonomously** and pick a confidence grade:
-   - **Confident match** → `set_review_status([ids], "approved", reason="auto: matches criterion X", reviewed_by="auto_high")`
-   - **Confident reject** → `set_review_status([ids], "rejected", reason="auto: off-topic — Y", reviewed_by="auto_high")`
+   - **Confident match** → `set_review_status([ids], "approved", reason="auto: matches criterion X", reviewed_by="auto_high")`. For approved/maybe papers, also pass `notes=[{type, text, cluster}]` in the same call — at minimum one `claim` or `finding` per paper. Notes go into the knowledge graph and feed synthesis + writing later. Skipping this empties the graph; do not skip.
+   - **Confident reject** → `set_review_status([ids], "rejected", reason="auto: off-topic — Y", reviewed_by="auto_high")`. No notes — rejected papers don't enter the graph.
    - **Leaning one way but not sure** — decide anyway, but use `reviewed_by="auto_low"`. The user can later run `get_low_confidence_reviews()` to sanity-check these.
    - **Genuinely borderline** (two criteria conflict, mixed signal) — defer to the user.
 5. Borderline cases go to the user **one at a time**, in the user's project language:
@@ -57,6 +57,39 @@ When a research area involves sensitive topics (AI safety, security, dual-use re
 - **Summary for outline, papers for prose.** When writing, the summary informs structure but abstracts come from `get_papers_for_writing(cluster=...)`.
 - **Clusters = user's categories.** If the user defined categories in criteria, use them. Do not reinvent.
 
+## Synthesis pass (after the corpus is reviewed)
+
+Per-paper notes describe single papers; synthesis names patterns *across* papers — gaps, contradictions, consensus, open questions. This is a separate pass; do not interleave it with reviewing.
+
+For each cluster:
+
+1. `get_cluster_notes(cluster)` — bundled view of per-paper notes grouped by paper + any existing cross-paper notes. One round-trip, no `get_notes` loops.
+2. Read across papers and identify:
+   - **gap** — something the cluster collectively doesn't cover.
+   - **contradiction** — two or more papers reaching incompatible conclusions on the same question.
+   - **consensus** — a non-trivial point most papers agree on.
+   - **open_question** — a question raised but not answered in the cluster.
+3. For each pattern → `add_synthesis_note(cluster, type, text, derived_from_note_ids=[...])`. Sources are mandatory — every cross-paper note must point at the per-paper notes that justify it via `derived_from`.
+4. After the pass, `find_gaps()` to surface clusters that still look thin or unsynthesised. Iterate or accept.
+
+`find_gaps` also flags cluster names that don't appear in the current `review_summary` — usually a typo or invented label. Fix the cluster on the offending notes before continuing.
+
+## Writing loop (per section, draft → critique → revise)
+
+Writing happens section-by-section, not document-at-a-time. Each section is an entity with its own scope, draft, status, and severity counters.
+
+1. **Outline.** `get_outline_inputs()` returns thesis + clusters + criteria. Propose section structure to the user (titles + scope = clusters/keywords/questions). After approval → `bulk_create_sections([...])`.
+2. **Per section, in order:**
+   1. `research_section(section_id)` if the user agrees the section's scope warrants more papers. Snowball through `expand_citations` is **not** automatic — the user runs it explicitly if needed.
+   2. `get_section_critique_inputs(section_id)` — the draft + relevant notes (filtered by `scope.clusters`) + linked papers. If notes are sparse, do another synthesis pass on those clusters first.
+   3. Draft the section. Update via `update_section(draft=..., status='drafting')`.
+   4. **Critique.** Switch voice to a strict academic reviewer. Generate `[{severity, type, text, suggested_action}]` issues — `severity ∈ {blocker, should_fix, nit}`. Submit via `record_section_critique(section_id, issues=...)`.
+      - Returns `{should_stop, severity, iteration}`. Stop when blockers=0 OR iteration≥2.
+      - Each issue should be actionable: cite a missing note, resolve a contradiction, drop an overclaimed sentence. Don't list aesthetic preferences as blockers.
+   5. **Revise.** `revise_section(section_id, new_draft=...)` resets counters and status to 'drafting'. Loop back to step ii.
+   6. Section done → `revise_section(section_id, new_draft=..., mark_done=True)` or `update_section(status='done')`.
+3. Document is done when every section has `status='done'`. There is no global "document done" toggle.
+
 ## Snowball loop
 
 After the first review pass:
@@ -86,6 +119,10 @@ Write in the user's project language natively — don't translate from English w
 - **Do not parse PDFs yourself.** Use abstracts from the source APIs.
 - **Do not recommend a decision on borderline papers.** Show facts; let the user decide.
 - **Do not use a system TeXLive.** Only tectonic (for LaTeX) or the typst binary.
+- **Do not draft a section without notes for its scope.** If `get_section_critique_inputs` returns an empty `notes` array, the section's claims won't be supported. Either review more papers into those clusters or narrow the scope.
+- **Do not auto-trigger `research_section` or `expand_citations` from inside the critique loop.** Critique reports gaps; the user decides whether the cost of more search is justified.
+- **Do not invent cluster names.** Clusters come from `review_summary`. New labels in notes or section scope cause `find_gaps` to flag them as unknown — and break the link between the graph and the corpus.
+- **Do not overload `blocker` severity.** Reserve it for issues that genuinely block shipping the section (unsupported claim, factual error, contradiction with cited paper). Style preferences are nits.
 
 ## Stuck detection
 
