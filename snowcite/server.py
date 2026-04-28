@@ -27,6 +27,7 @@ from snowcite.tools import (  # noqa: F401
     review,
     review_quality,
     search,
+    sections as section_tools,
     session,
     synthesis as synthesis_tools,
     writing,
