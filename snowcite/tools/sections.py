@@ -47,6 +47,7 @@ def _row_to_section(row: Any) -> dict[str, Any]:
             "should_fix": row["should_fix"],
             "nits": row["nits"],
         },
+        "critique_iterations": row["critique_iterations"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -142,7 +143,7 @@ async def list_sections() -> list[dict[str, Any]]:
         cur = await conn.execute(
             """
             SELECT id, title, scope_json, draft, status, parent_id, position,
-                   blockers, should_fix, nits, created_at, updated_at
+                   blockers, should_fix, nits, critique_iterations, created_at, updated_at
             FROM sections
             ORDER BY COALESCE(parent_id, 0), position, id
             """
@@ -158,7 +159,7 @@ async def get_section(section_id: int) -> dict[str, Any] | None:
         cur = await conn.execute(
             """
             SELECT id, title, scope_json, draft, status, parent_id, position,
-                   blockers, should_fix, nits, created_at, updated_at
+                   blockers, should_fix, nits, critique_iterations, created_at, updated_at
             FROM sections WHERE id = ?
             """,
             (section_id,),
