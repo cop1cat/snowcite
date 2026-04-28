@@ -162,6 +162,21 @@ CREATE TABLE IF NOT EXISTS sections (
 CREATE INDEX IF NOT EXISTS idx_sections_parent ON sections(parent_id);
 CREATE INDEX IF NOT EXISTS idx_sections_status ON sections(status);
 
+-- Records which papers were discovered while researching a particular section.
+-- A paper can link to multiple sections (typical for cross-cutting topics);
+-- the link is purely additive — does not affect the global paper pool or its
+-- review status, just answers "where did this paper enter the corpus?".
+CREATE TABLE IF NOT EXISTS paper_section_links (
+    paper_id INTEGER NOT NULL REFERENCES papers(id) ON DELETE CASCADE,
+    section_id INTEGER NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
+    discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    via_query TEXT,
+    PRIMARY KEY (paper_id, section_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_paper_section_links_section
+    ON paper_section_links(section_id);
+
 CREATE TABLE IF NOT EXISTS notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     paper_id INTEGER REFERENCES papers(id) ON DELETE CASCADE,
