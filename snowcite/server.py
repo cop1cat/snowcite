@@ -24,6 +24,7 @@ from snowcite.tools import (  # noqa: F401
     import_refs,
     init,
     notes as note_tools,
+    research as research_tools,
     review,
     review_quality,
     search,
