@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS sections (
     blockers INTEGER NOT NULL DEFAULT 0,
     should_fix INTEGER NOT NULL DEFAULT 0,
     nits INTEGER NOT NULL DEFAULT 0,
+    critique_iterations INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
@@ -293,6 +294,18 @@ async def _migrate_reviews_confidence(conn: aiosqlite.Connection) -> None:
     )
 
 
+async def _migrate_sections_add_columns(conn: aiosqlite.Connection) -> None:
+    """Add critique_iterations to pre-Phase-5 `sections` tables."""
+    cur = await conn.execute("PRAGMA table_info(sections)")
+    existing = {row[1] for row in await cur.fetchall()}
+    if not existing:
+        return
+    if "critique_iterations" not in existing:
+        await conn.execute(
+            "ALTER TABLE sections ADD COLUMN critique_iterations INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 async def _migrate_project_metadata_add_columns(conn: aiosqlite.Connection) -> None:
     """Append missing target-metric columns to pre-existing `project_metadata` tables.
 
@@ -325,6 +338,7 @@ async def init_db(db_path: Path | None = None) -> None:
         async with aiosqlite.connect(path) as conn:
             await _migrate_reviews_confidence(conn)
             await conn.executescript(SCHEMA)
+            await _migrate_sections_add_columns(conn)
             await _migrate_project_metadata_add_columns(conn)
             await conn.commit()
         _initialized.add(resolved)
