@@ -10,7 +10,7 @@ from snowcite.app import mcp
 from snowcite.db import get_connection
 from snowcite.persistence import resolve_cluster_paper_ids
 from snowcite.tools.common import paper_row_to_dict
-from snowcite.types import ReviewedBy, Source, Status
+from snowcite.types import PER_PAPER_NOTE_TYPES, ReviewedBy, Source, Status
 
 
 # Same cite-ref shape recognised by bibliography.rewrite_cite_refs. Duplicated
@@ -171,7 +171,8 @@ async def set_review_status(
     reason: str,
     note: str | None = None,
     reviewed_by: ReviewedBy = "auto_high",
-) -> dict[str, int]:
+    notes: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     """Batch-set review status with required reason (PRISMA trail). Marks summary stale.
 
     Use `reviewed_by`:
@@ -180,9 +181,34 @@ async def set_review_status(
       user should sanity-check these. Fetch with `get_low_confidence_reviews()`
       during a second pass, or surface them proactively.
     - `"user"` — the user decided.
+
+    `notes` — optional graph notes recorded in the same call so review and
+    extraction stay co-located. Each item: `{type, text, cluster?}` where `type`
+    is a per-paper note type (claim/finding/method/limitation). Only allowed
+    when `paper_ids` has exactly one entry — otherwise the same notes would
+    duplicate across papers, which is almost never what you mean.
     """
+    if notes and len(paper_ids) != 1:
+        return {
+            "updated": 0,
+            "error": "inline notes require exactly one paper_id; record them per-paper",
+        }
+    if notes:
+        for idx, item in enumerate(notes):
+            ntype = item.get("type")
+            ntext = item.get("text", "")
+            if ntype not in PER_PAPER_NOTE_TYPES:
+                return {
+                    "updated": 0,
+                    "error": f"notes[{idx}].type must be a per-paper type "
+                    f"({sorted(PER_PAPER_NOTE_TYPES)}); got {ntype!r}",
+                }
+            if not isinstance(ntext, str) or not ntext.strip():
+                return {"updated": 0, "error": f"notes[{idx}].text is empty"}
+
     updated = 0
     skipped: list[int] = []
+    inserted_note_ids: list[int] = []
     async with get_connection() as conn:
         for idx, pid in enumerate(paper_ids):
             # Per-paper SAVEPOINT so a mid-batch failure rolls back that paper
@@ -225,10 +251,23 @@ async def set_review_status(
             updated += 1
         if updated > 0:
             await _mark_summary_stale(conn)
+        # Inline notes — only when exactly one paper was updated successfully.
+        # If the single paper_id was skipped, drop the notes silently rather
+        # than orphan-attach them.
+        if notes and updated == 1:
+            pid = paper_ids[0]
+            for item in notes:
+                cur = await conn.execute(
+                    "INSERT INTO notes (paper_id, cluster, type, text) VALUES (?, ?, ?, ?)",
+                    (pid, item.get("cluster"), item["type"], item["text"].strip()),
+                )
+                inserted_note_ids.append(cur.lastrowid)
         await conn.commit()
     result: dict[str, Any] = {"updated": updated}
     if skipped:
         result["skipped_invalid_ids"] = skipped
+    if inserted_note_ids:
+        result["note_ids"] = inserted_note_ids
     return result
 
 

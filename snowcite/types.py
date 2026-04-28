@@ -31,6 +31,24 @@ type Phase = Literal[
     "done",
 ]
 type ArtifactType = Literal["interview", "code", "document", "note", "dataset"]
+# Knowledge-graph note types. Per-paper extraction during review yields the
+# first four; cross-paper synthesis (Phase 2) yields the last four.
+type NoteType = Literal[
+    "claim",
+    "finding",
+    "method",
+    "limitation",
+    "gap",
+    "contradiction",
+    "consensus",
+    "open_question",
+]
+type NoteLinkKind = Literal["supports", "contradicts", "extends", "derived_from"]
+# Per-paper types must carry paper_id; cross-paper types must leave it NULL.
+PER_PAPER_NOTE_TYPES: frozenset[str] = frozenset({"claim", "finding", "method", "limitation"})
+CROSS_PAPER_NOTE_TYPES: frozenset[str] = frozenset(
+    {"gap", "contradiction", "consensus", "open_question"}
+)
 
 
 # ─── TypedDicts for DB-shaped data ──────────────────────────────────────────
